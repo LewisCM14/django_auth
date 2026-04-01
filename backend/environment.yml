@@ -1,0 +1,19 @@
+name: django_auth
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.14
+  - django>=6.0.0
+  - djangorestframework>=3.0.0
+  - drf-spectacular
+  - django-cors-headers
+  - ldap3>=2.9
+  - python-dotenv
+  - pytest
+  - pytest-django
+  - pytest-mock
+  - pytest-cov
+  - mypy
+  - django-stubs
+  - djangorestframework-stubs
