@@ -1,8 +1,18 @@
 """Authorization middleware.
 
-Maps user LDAP group memberships to application roles and enforces
-role-based access control.
+Enforces explicit per-view authorization policy via decorators.
+Every view under ``api.views`` must declare one of:
+
+- ``@authz_public`` — no authentication or roles required
+- ``@authz_authenticated`` — IIS authentication required, no role check
+- ``@authz_roles(...)`` — IIS authentication required with specific role(s)
+
+Role resolution happens only for role-protected views:
+
+- Dev mode (``AUTH_MODE=dev``): reads ``DEV_USER_ROLE`` from environment
+- IIS mode (``AUTH_MODE=iis``): queries LDAP for AD group membership (cached)
 """
+
 from __future__ import annotations
 
 import os
@@ -11,34 +21,26 @@ from typing import Any, Callable
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils.decorators import sync_and_async_middleware
 from rest_framework.exceptions import AuthenticationFailed
 
-from api.constants import AD_GROUP_TO_ROLE_MAP, ROLE_ADMIN
-from api.decorators import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
+from api.constants import AD_GROUP_TO_ROLE_MAP, ROLE_ADMIN, ROLE_VIEWER
+from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
 
 
 @sync_and_async_middleware
 class AuthorizationMiddleware:
-    """Middleware that assigns roles to authenticated requests.
-    
-    In dev mode:
-    - Reads role from DEV_USER_ROLE environment variable
-    - Defaults to 'admin' if not configured
-    - Attaches role(s) to request.user.roles
-    
-    In IIS mode:
-    - Queries LDAP for user's group memberships
-    - Caches results with configurable TTL
-    - Maps AD groups to application roles
-    - Raises PermissionDenied if user has no matching roles
-    - Skips authorization for excluded paths (e.g., /api/health/)
+    """Enforces per-view authorization policies set by decorators.
+
+    Strict mode: all routed views must live under ``api.views`` and declare
+    an explicit authorization policy. Views without a policy raise
+    ``ImproperlyConfigured`` at request time.
     """
 
     def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
         """Initialize the middleware.
-        
+
         Args:
             get_response: The next middleware or view in the chain.
         """
@@ -46,10 +48,10 @@ class AuthorizationMiddleware:
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
         """Process the request and response.
-        
+
         Args:
             request: The HTTP request object.
-            
+
         Returns:
             The HTTP response from the next middleware or view.
         """
@@ -61,7 +63,7 @@ class AuthorizationMiddleware:
         view_func: Any,
         view_args: list[Any],
         view_kwargs: dict[str, Any],
-    ) -> None:
+    ) -> HttpResponse | None:
         """Run authorization checks once the target view is known.
 
         Strict mode is enabled: only views under ``api.views`` are allowed and
@@ -82,75 +84,50 @@ class AuthorizationMiddleware:
                 "through wrapper views in api.views."
             )
 
-        policy = self._get_view_policy(view_func)
-        if policy is None:
-            raise ImproperlyConfigured(
-                "Every view in api.views must declare an authorization policy "
-                "using @authz_public, @authz_authenticated, or @authz_roles(...)."
-            )
-
-        if policy == "public":
-            return
-
-        if policy == "authenticated":
-            self._ensure_authenticated(request)
-            return
-
-        if policy == "roles":
-            self._ensure_authenticated(request)
-            username = self._get_authenticated_username(request)
-            user_roles = self._get_user_roles(username)
-            request.user.roles = user_roles  # type: ignore[union-attr]
-
-            required_roles = self._get_required_roles(view_func)
-            if not required_roles:
+        try:
+            policy = self._get_view_policy(view_func)
+            if policy is None:
                 raise ImproperlyConfigured(
-                    "@authz_roles decorator requires at least one role."
+                    "Every view in api.views must declare an authorization policy "
+                    "using @authz_public, @authz_authenticated, or @authz_roles(...)."
                 )
 
-            if not any(role in user_roles for role in required_roles):
-                raise PermissionDenied(
-                    "User is not a member of any required application roles."
-                )
-            return
+            if policy == "public":
+                return None
 
-        raise ImproperlyConfigured(f"Unknown authz policy '{policy}'.")
+            if policy == "authenticated":
+                self._ensure_authenticated(request)
+                return None
 
-    def process_request(self, request: HttpRequest) -> None:
-        """Assign roles to the request based on user identity.
-        
-        Args:
-            request: The HTTP request object to authorize.
-            
-        Raises:
-            AuthenticationFailed: If no user is authenticated (IIS mode).
-            PermissionDenied: If user has no matching application roles (IIS mode).
-        """
-        auth_mode = os.getenv("AUTH_MODE", "iis")
-        
-        if auth_mode == "dev":
-            # Development mode: assign role from environment variable
-            dev_user_role = os.getenv("DEV_USER_ROLE", "admin").lower()
-            # Map role name to constant
-            if dev_user_role == "admin":
-                roles = [ROLE_ADMIN]
-            else:
-                # Map to viewer or default to viewer
-                from api.constants import ROLE_VIEWER
-                roles = [ROLE_VIEWER]
-            request.user.roles = roles  # type: ignore[union-attr]
-        else:
-            # IIS mode: query LDAP and map to roles
-            self._ensure_authenticated(request)
-            username = self._get_authenticated_username(request)
-            roles = self._get_user_roles(username)
+            if policy == "roles":
+                self._ensure_authenticated(request)
+                username = self._get_authenticated_username(request)
+                user_roles = self._get_user_roles(username)
+                request.user.roles = user_roles  # type: ignore[union-attr]
 
-            if not roles:
-                raise PermissionDenied(
-                    "User is not a member of any configured application groups."
-                )
+                required_roles = self._get_required_roles(view_func)
+                if not required_roles:
+                    raise ImproperlyConfigured(
+                        "@authz_roles decorator requires at least one role."
+                    )
 
-            request.user.roles = roles  # type: ignore[union-attr]
+                if not any(role in user_roles for role in required_roles):
+                    raise PermissionDenied(
+                        "User is not a member of any required application roles."
+                    )
+                return None
+
+            raise ImproperlyConfigured(f"Unknown authz policy '{policy}'.")
+        except AuthenticationFailed:
+            return JsonResponse(
+                {"detail": "Authentication credentials were not provided."},
+                status=401,
+            )
+        except PermissionDenied:
+            return JsonResponse(
+                {"detail": "You do not have permission to perform this action."},
+                status=403,
+            )
 
     def _is_project_view(self, view_func: Any | None) -> bool:
         """Return True when the resolved view belongs to api.views."""
@@ -193,7 +170,8 @@ class AuthorizationMiddleware:
 
     def _ensure_authenticated(self, request: HttpRequest) -> None:
         """Ensure request has an authenticated user identity."""
-        if not request.user or not hasattr(request.user, "username"):
+        user = request.user
+        if not user or not getattr(user, "is_authenticated", False):
             raise AuthenticationFailed("User not authenticated (no REMOTE_USER).")
 
     def _get_authenticated_username(self, request: HttpRequest) -> str:
@@ -204,58 +182,53 @@ class AuthorizationMiddleware:
         return username
 
     def _get_user_roles(self, username: str) -> list[str]:
-        """Get application roles for a user via LDAP (with caching).
-        
+        """Resolve application roles for a user.
+
+        In dev mode, reads from ``DEV_USER_ROLE`` environment variable.
+        In IIS mode, queries LDAP for AD group membership (with caching).
+
         Args:
-            username: The username to query (DOMAIN\\username format).
-            
+            username: The username to resolve roles for.
+
         Returns:
             List of application roles the user belongs to.
         """
+        if os.getenv("AUTH_MODE", "iis") == "dev":
+            dev_role = os.getenv("DEV_USER_ROLE", "admin").lower()
+            return [ROLE_ADMIN] if dev_role == "admin" else [ROLE_VIEWER]
+
         cache_key = f"ldap_groups_{username}"
-        
-        # Try to get from cache
+
         cached_roles = cache.get(cache_key)
         if cached_roles is not None:
             return cached_roles  # type: ignore[no-any-return]
-        
-        # Query LDAP for groups
+
         ad_groups = query_ldap_groups(username)
-        
-        # Map AD groups to application roles
+
         roles = []
         for ad_group in ad_groups:
             if ad_group in AD_GROUP_TO_ROLE_MAP:
                 role = AD_GROUP_TO_ROLE_MAP[ad_group]
                 if role not in roles:
                     roles.append(role)
-        
-        # Cache the result
+
         cache_ttl = getattr(settings, "LDAP_CACHE_TTL", 300)
         cache.set(cache_key, roles, cache_ttl)
-        
+
         return roles
 
 
 def query_ldap_groups(username: str) -> list[str]:
     """Query LDAP for user's group memberships.
-    
+
     In a real implementation, this would connect to Active Directory via LDAP
     and retrieve the list of groups the user belongs to. For now, this is a
     placeholder that returns an empty list (tests mock this function).
-    
+
     Args:
         username: The username to query (typically DOMAIN\\username).
-        
+
     Returns:
-        List of LDAP group DNs (Distinguished Names) the user belongs to.
-        
-    Example return value:
-        [
-            "CN=app-admins,OU=Groups,DC=corp,DC=local",
-            "CN=app-viewers,OU=Groups,DC=corp,DC=local",
-        ]
+        List of LDAP group DNs the user belongs to.
     """
-    # Placeholder - in production, this would use ldap3 to query AD
-    # For now, tests will mock this function
     return []

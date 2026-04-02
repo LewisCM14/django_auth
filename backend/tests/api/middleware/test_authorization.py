@@ -1,271 +1,254 @@
 """Tests for the authorization middleware.
 
-About authorization middleware:
-    The authorization middleware runs AFTER authentication middleware in the
-    pipeline. At this point:
-    - request.user is populated (from authentication middleware)
-    - We need to fetch the user's roles based on their identity
-    
-    In dev mode:
-    - Roles come from DEV_USER_ROLE environment variable (defaults to 'admin')
-    
-    In IIS mode:
-    - Roles come from LDAP group membership query
-    - Results are cached to avoid querying AD on every request
-    - Cache TTL is configurable via LDAP_CACHE_TTL setting
-    
-    The middleware attaches roles to request.user as request.user.roles, which
-    DRF permission classes can then check to enforce access control.
-    
-    Public access is now explicit via @authz_public on views.
+The authorization middleware enforces explicit per-view authorization via
+decorators. Every view must declare ``@authz_public``, ``@authz_authenticated``,
+or ``@authz_roles(...)``. There are no default permissions — future developers
+must explicitly set authorization at the view level.
+
+Role resolution happens only when a view requires roles:
+- Dev mode: reads ``DEV_USER_ROLE`` environment variable
+- IIS mode: queries LDAP (with caching) for AD group membership
 """
+
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
-from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.test import override_settings
 
-from api.constants import ROLE_ADMIN, ROLE_VIEWER, ROLES
+from api.constants import ROLE_ADMIN, ROLE_VIEWER
 from api.middleware.authorization import AuthorizationMiddleware
+
+
+def _make_roles_view(
+    roles: tuple[str, ...] = (ROLE_ADMIN, ROLE_VIEWER),
+) -> Any:
+    """Create a dummy view with roles policy for testing."""
+
+    class RolesView:
+        authz_policy = "roles"
+        authz_roles = roles
+
+    RolesView.__module__ = "api.views.sample"
+
+    def wrapped_view() -> None:
+        return None
+
+    # Django's URL resolver attaches `view_class` dynamically to the callable
+    # returned by `as_view()`. In tests we emulate that runtime shape.
+    wrapped_view.view_class = RolesView  # type: ignore[attr-defined]
+    return wrapped_view
 
 
 class TestAuthorizationMiddlewareDevMode:
     """Tests for authorization middleware in dev mode (AUTH_MODE=dev)."""
 
     @staticmethod
-    def get_response(request):
+    def get_response(request: Any) -> Mock:
         """Mock WSGI application for middleware testing."""
         response = Mock()
         response.status_code = 200
         return response
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """Clear cache before each test."""
         cache.clear()
 
     @override_settings(DEBUG=True)
-    def test_dev_mode_assigns_role_from_env(self) -> None:
-        """In dev mode, roles come from DEV_USER_ROLE environment variable.
-        
-        The middleware should read DEV_USER_ROLE (e.g., 'admin' or 'viewer')
-        and assign the corresponding application role to request.user.roles.
-        """
+    def test_dev_mode_assigns_admin_role_from_env(self) -> None:
+        """In dev mode with DEV_USER_ROLE=admin, user gets app_admin role."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="dev_admin")
-        request.path = "/api/user/"
-        
+        view_func = _make_roles_view()
+
         with patch.dict("os.environ", {"AUTH_MODE": "dev", "DEV_USER_ROLE": "admin"}):
-            middleware.process_request(request)
-        
-        assert hasattr(request.user, "roles")
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
         assert ROLE_ADMIN in request.user.roles
 
     @override_settings(DEBUG=True)
     def test_dev_mode_defaults_to_admin(self) -> None:
-        """When DEV_USER_ROLE is not set in dev mode, defaults to 'admin'.
-        
-        The middleware should use a sensible default for development if the
-        environment variable is not configured.
-        """
+        """When DEV_USER_ROLE is not set, defaults to admin."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="dev_admin")
-        request.path = "/api/user/"
-        
+        view_func = _make_roles_view()
+
         with patch.dict("os.environ", {"AUTH_MODE": "dev"}, clear=False):
-            # Don't set DEV_USER_ROLE, should default to admin
-            middleware.process_request(request)
-        
-        assert hasattr(request.user, "roles")
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
         assert ROLE_ADMIN in request.user.roles
+
+    @override_settings(DEBUG=True)
+    def test_dev_mode_viewer_role_from_env(self) -> None:
+        """In dev mode with DEV_USER_ROLE=viewer, user gets app_viewer role."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="dev_viewer")
+        view_func = _make_roles_view()
+
+        with patch.dict("os.environ", {"AUTH_MODE": "dev", "DEV_USER_ROLE": "viewer"}):
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
+        assert request.user.roles == [ROLE_VIEWER]
 
 
 class TestAuthorizationMiddlewareIISMode:
     """Tests for authorization middleware in IIS mode (AUTH_MODE=iis)."""
 
     @staticmethod
-    def get_response(request):
+    def get_response(request: Any) -> Mock:
         """Mock WSGI application for middleware testing."""
         response = Mock()
         response.status_code = 200
         return response
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """Clear cache before each test."""
         cache.clear()
 
     @override_settings(DEBUG=False)
     def test_user_with_admin_group_gets_admin_role(self) -> None:
-        """User with admin group in LDAP gets app_admin role.
-        
-        The middleware should query LDAP, find the user in the admin group,
-        map that to app_admin role, and attach it to request.user.roles.
-        """
+        """User in LDAP admin group receives app_admin role."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="DOMAIN\\admin_user")
-        request.path = "/api/user/"
-        
-        # Mock LDAP to return admin group
+        view_func = _make_roles_view()
+
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                middleware.process_request(request)
-        
-        assert hasattr(request.user, "roles")
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
         assert ROLE_ADMIN in request.user.roles
 
     @override_settings(DEBUG=False)
     def test_user_with_viewer_group_gets_viewer_role(self) -> None:
-        """User with viewer group in LDAP gets app_viewer role.
-        
-        Similar to admin test, but for viewer role.
-        """
+        """User in LDAP viewer group receives app_viewer role."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="DOMAIN\\viewer_user")
-        request.path = "/api/user/"
-        
-        # Mock LDAP to return viewer group
+        view_func = _make_roles_view()
+
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = ["CN=app-viewers,OU=Groups,DC=corp,DC=local"]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                middleware.process_request(request)
-        
-        assert hasattr(request.user, "roles")
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
         assert ROLE_VIEWER in request.user.roles
 
     @override_settings(DEBUG=False)
     def test_user_with_multiple_groups_gets_multiple_roles(self) -> None:
-        """User in multiple groups gets all corresponding roles.
-        
-        A user could be in both admin and viewer groups, so they should
-        get both roles.
-        """
+        """User in multiple AD groups gets all corresponding roles."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="DOMAIN\\power_user")
-        request.path = "/api/user/"
-        
-        # Mock LDAP to return both groups
+        view_func = _make_roles_view()
+
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = [
                 "CN=app-admins,OU=Groups,DC=corp,DC=local",
                 "CN=app-viewers,OU=Groups,DC=corp,DC=local",
             ]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                middleware.process_request(request)
-        
-        assert hasattr(request.user, "roles")
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
         assert ROLE_ADMIN in request.user.roles
         assert ROLE_VIEWER in request.user.roles
 
     @override_settings(DEBUG=False)
     def test_user_with_no_matching_groups_returns_403(self) -> None:
-        """User authenticated but not in any configured AD group → 403 Forbidden.
-        
-        LDAP query succeeds but returns groups that don't map to app roles.
-        The middleware should raise a PermissionDenied exception (caught by DRF).
-        """
+        """User authenticated but not in any configured AD group gets 403 JSON."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="DOMAIN\\regular_user")
-        request.path = "/api/user/"
-        
-        # Mock LDAP to return non-matching group
+        view_func = _make_roles_view()
+
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = ["CN=other-group,OU=Groups,DC=corp,DC=local"]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                from django.core.exceptions import PermissionDenied
-                with pytest.raises(PermissionDenied):
-                    middleware.process_request(request)
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 403
+        import json
+
+        body = json.loads(result.content)
+        assert body == {"detail": "You do not have permission to perform this action."}
 
     @override_settings(DEBUG=False)
     def test_unauthenticated_request_returns_401(self) -> None:
-        """Request without user is rejected with 401.
-        
-        If request.user is None or not set, the middleware should raise
-        an AuthenticationFailed exception (caught by DRF as 401).
-        """
+        """Request without user identity returns 401 JSON response."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = None
-        request.path = "/api/user/"
-        
-        from rest_framework.exceptions import AuthenticationFailed
+        view_func = _make_roles_view()
+
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-            with pytest.raises(AuthenticationFailed):
-                middleware.process_request(request)
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 401
 
     @override_settings(DEBUG=False)
     def test_ldap_result_is_cached(self) -> None:
-        """LDAP query result for a user is cached.
-        
-        Second request for same user should not trigger LDAP query.
-        """
+        """LDAP query result for a user is cached across requests."""
         middleware = AuthorizationMiddleware(self.get_response)
-        request = Mock()
-        username = "DOMAIN\\cached_user"
-        request.user = Mock(username=username)
-        request.path = "/api/user/"
-        
+        view_func = _make_roles_view()
+
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
-            
+
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                # First request
-                middleware.process_request(request)
+                request1 = Mock()
+                request1.user = Mock(username="DOMAIN\\cached_user")
+                middleware.process_view(request1, view_func, [], {})
                 assert mock_ldap.call_count == 1
-                
-                # Second request (same user)
+
                 request2 = Mock()
-                request2.user = Mock(username=username)
-                request2.path = "/api/user/"
-                middleware.process_request(request2)
-                # Should still be 1 (not called again due to cache)
+                request2.user = Mock(username="DOMAIN\\cached_user")
+                middleware.process_view(request2, view_func, [], {})
                 assert mock_ldap.call_count == 1
 
     @override_settings(DEBUG=False)
     def test_cache_respects_ttl(self) -> None:
-        """Cache entry expires after LDAP_CACHE_TTL seconds.
-        
-        After TTL expiry, next request for same user should query LDAP again.
-        """
+        """Cache expires after LDAP_CACHE_TTL; next request queries LDAP."""
         middleware = AuthorizationMiddleware(self.get_response)
-        request = Mock()
+        view_func = _make_roles_view()
         username = "DOMAIN\\ttl_user"
-        request.user = Mock(username=username)
-        request.path = "/api/user/"
-        
+
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
-            
+
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                # First request caches result
-                middleware.process_request(request)
+                request1 = Mock()
+                request1.user = Mock(username=username)
+                middleware.process_view(request1, view_func, [], {})
                 assert mock_ldap.call_count == 1
-                
-                # Clear cache to simulate TTL expiry
+
                 cache.delete(f"ldap_groups_{username}")
-                
-                # Second request should query LDAP again
+
                 request2 = Mock()
                 request2.user = Mock(username=username)
-                request2.path = "/api/user/"
-                middleware.process_request(request2)
+                middleware.process_view(request2, view_func, [], {})
                 assert mock_ldap.call_count == 2
 
     @override_settings(DEBUG=False)
-    def test_health_endpoint_bypasses_authorization(self) -> None:
-        """Public policy bypasses authorization checks."""
+    def test_public_policy_bypasses_authorization(self) -> None:
+        """Public policy views bypass all authorization checks."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
-        request.user = None  # No user
-        request.path = "/api/health/"
+        request.user = None
 
         class PublicView:
             """Dummy class-based view marker for public policy."""
@@ -278,10 +261,14 @@ class TestAuthorizationMiddlewareIISMode:
             """Dummy resolved callable used by Django for class-based views."""
             return None
 
+        # Django's URL resolver attaches `view_class` dynamically to the callable
+        # returned by `as_view()`. In tests we emulate that runtime shape.
         wrapped_view.view_class = PublicView  # type: ignore[attr-defined]
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-            middleware.process_view(request, wrapped_view, [], {})
+            result = middleware.process_view(request, wrapped_view, [], {})
+
+        assert result is None
 
     @override_settings(DEBUG=False)
     def test_non_project_view_raises_improperly_configured(self) -> None:
@@ -289,7 +276,6 @@ class TestAuthorizationMiddlewareIISMode:
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = None
-        request.path = "/api/private/"
 
         def wrapped_view() -> None:
             """Dummy resolved callable for third-party view simulation."""
@@ -298,9 +284,61 @@ class TestAuthorizationMiddlewareIISMode:
         wrapped_view.__module__ = "third_party.module"
 
         from django.core.exceptions import ImproperlyConfigured
+
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             with pytest.raises(ImproperlyConfigured):
                 middleware.process_view(request, wrapped_view, [], {})
+
+    @override_settings(DEBUG=False)
+    def test_authenticated_policy_allows_authenticated_user(self) -> None:
+        """authz_authenticated policy allows access with identity only (no roles)."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\user")
+
+        class AuthenticatedView:
+            """Dummy authenticated-only view marker."""
+
+            authz_policy = "authenticated"
+
+        AuthenticatedView.__module__ = "api.views.docs"
+
+        def wrapped_view() -> None:
+            return None
+
+        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
+
+        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
+            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                result = middleware.process_view(request, wrapped_view, [], {})
+
+        assert result is None
+        assert mock_ldap.call_count == 0
+
+    @override_settings(DEBUG=False)
+    def test_authenticated_policy_rejects_unauthenticated_user(self) -> None:
+        """authz_authenticated policy returns 401 when no user identity."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = None
+
+        class AuthenticatedView:
+            """Dummy authenticated-only view marker."""
+
+            authz_policy = "authenticated"
+
+        AuthenticatedView.__module__ = "api.views.docs"
+
+        def wrapped_view() -> None:
+            return None
+
+        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            result = middleware.process_view(request, wrapped_view, [], {})
+
+        assert result is not None
+        assert result.status_code == 401
 
     @override_settings(DEBUG=False)
     def test_missing_view_policy_raises_improperly_configured(self) -> None:
@@ -308,7 +346,6 @@ class TestAuthorizationMiddlewareIISMode:
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="DOMAIN\\user")
-        request.path = "/api/user/"
 
         class UndecoratedView:
             """Dummy undecorated view class for policy enforcement test."""
@@ -319,38 +356,15 @@ class TestAuthorizationMiddlewareIISMode:
             """Dummy resolved callable used by Django for class-based views."""
             return None
 
+        # Mirrors Django's runtime behavior where `as_view()` callables carry
+        # a dynamically attached `view_class` attribute.
         wrapped_view.view_class = UndecoratedView  # type: ignore[attr-defined]
 
         from django.core.exceptions import ImproperlyConfigured
+
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             with pytest.raises(ImproperlyConfigured):
                 middleware.process_view(request, wrapped_view, [], {})
-
-    @override_settings(DEBUG=False)
-    def test_authenticated_policy_allows_authenticated_user_without_roles(self) -> None:
-        """authz_authenticated policy allows access with identity only."""
-        middleware = AuthorizationMiddleware(self.get_response)
-        request = Mock()
-        request.user = Mock(username="DOMAIN\\user")
-        request.path = "/api/any-auth/"
-
-        class AuthenticatedView:
-            """Dummy authenticated-only view marker."""
-
-            authz_policy = "authenticated"
-
-        AuthenticatedView.__module__ = "api.views.sample"
-
-        def wrapped_view() -> None:
-            """Dummy resolved callable used by Django for class-based views."""
-            return None
-
-        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
-
-        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
-            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                middleware.process_view(request, wrapped_view, [], {})
-        assert mock_ldap.call_count == 0
 
     @override_settings(DEBUG=False)
     def test_roles_policy_denies_when_required_role_missing(self) -> None:
@@ -358,26 +372,98 @@ class TestAuthorizationMiddlewareIISMode:
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="DOMAIN\\viewer_user")
-        request.path = "/api/admin-only/"
-
-        class AdminOnlyView:
-            """Dummy role-protected view marker."""
-
-            authz_policy = "roles"
-            authz_roles = ("app_admin",)
-
-        AdminOnlyView.__module__ = "api.views.sample"
-
-        def wrapped_view() -> None:
-            """Dummy resolved callable used by Django for class-based views."""
-            return None
-
-        wrapped_view.view_class = AdminOnlyView  # type: ignore[attr-defined]
+        view_func = _make_roles_view(roles=("app_admin",))
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = ["CN=app-viewers,OU=Groups,DC=corp,DC=local"]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                from django.core.exceptions import PermissionDenied
+                result = middleware.process_view(request, view_func, [], {})
 
-                with pytest.raises(PermissionDenied):
+        assert result is not None
+        assert result.status_code == 403
+
+    @override_settings(DEBUG=False)
+    def test_roles_policy_with_no_required_roles_raises_improperly_configured(
+        self,
+    ) -> None:
+        """authz_roles policy must include at least one required role."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\admin_user")
+
+        class MisconfiguredRolesView:
+            """Dummy roles policy view without authz_roles metadata."""
+
+            authz_policy = "roles"
+
+        MisconfiguredRolesView.__module__ = "api.views.sample"
+
+        def wrapped_view() -> None:
+            return None
+
+        # Mirrors Django's runtime behavior where `as_view()` callables carry
+        # a dynamically attached `view_class` attribute.
+        wrapped_view.view_class = MisconfiguredRolesView  # type: ignore[attr-defined]
+
+        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
+            mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
+            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                from django.core.exceptions import ImproperlyConfigured
+
+                with pytest.raises(
+                    ImproperlyConfigured, match="requires at least one role"
+                ):
                     middleware.process_view(request, wrapped_view, [], {})
+
+    @override_settings(DEBUG=False)
+    def test_unknown_policy_raises_improperly_configured(self) -> None:
+        """Unknown authz policy values are rejected."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\admin_user")
+
+        class UnknownPolicyView:
+            """Dummy view with unsupported policy value."""
+
+            authz_policy = "unknown"
+
+        UnknownPolicyView.__module__ = "api.views.sample"
+
+        def wrapped_view() -> None:
+            return None
+
+        # Mirrors Django's runtime behavior where `as_view()` callables carry
+        # a dynamically attached `view_class` attribute.
+        wrapped_view.view_class = UnknownPolicyView  # type: ignore[attr-defined]
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            from django.core.exceptions import ImproperlyConfigured
+
+            with pytest.raises(ImproperlyConfigured, match="Unknown authz policy"):
+                middleware.process_view(request, wrapped_view, [], {})
+
+    def test_is_project_view_returns_false_for_none(self) -> None:
+        """_is_project_view handles None safely."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        assert middleware._is_project_view(None) is False
+
+    @override_settings(DEBUG=False)
+    def test_authenticated_user_with_empty_username_returns_401(self) -> None:
+        """Authenticated user with empty username returns 401."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(is_authenticated=True, username="")
+        view_func = _make_roles_view()
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 401
+
+
+def test_query_ldap_groups_placeholder_returns_empty_list() -> None:
+    """Default LDAP query placeholder returns an empty group list."""
+    from api.middleware.authorization import query_ldap_groups
+
+    assert query_ldap_groups("DOMAIN\\someone") == []

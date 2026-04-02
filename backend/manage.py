@@ -4,13 +4,14 @@
 Provides a command-line interface for running Django management tasks
 (e.g., 'python manage.py runserver', 'python manage.py migrate').
 """
+
 import os
 import sys
 
 
 def main() -> None:
     """Execute Django management command from command-line arguments.
-    
+
     Raises:
         ImportError: If Django is not installed or not on PYTHONPATH.
     """

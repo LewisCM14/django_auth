@@ -3,6 +3,7 @@
 Delegates all API routing to the api.urls module. This module only
 handles project-level path inclusion and does not define views directly.
 """
+
 from django.urls import URLPattern, URLResolver, include, path
 
 from api.views.docs import SchemaView, SwaggerDocsView

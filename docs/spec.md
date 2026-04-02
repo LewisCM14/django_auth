@@ -89,7 +89,7 @@ flowchart LR
     Proxy -- "WSGI (wfastcgi)" --> MW_RID
     MW_RID --> MW_AuthN
     MW_AuthN --> MW_AuthZ
-    MW_AuthZ -- "LDAP lookup\n(cached)" --> AD
+    MW_AuthZ -- "LDAP lookup\n(cached, @authz_roles only)" --> AD
     MW_AuthZ --> API
     API --> SVC
     SVC --> ADP
@@ -104,12 +104,13 @@ flowchart LR
     - Leverages Django's built-in `RemoteUserMiddleware` and `RemoteUserBackend` to authenticate the IIS-provided `REMOTE_USER`.
     - Uses `ldap3` library to query Active Directory for group membership, with results cached via Django's cache framework (configurable TTL) to avoid querying AD on every request.
     - Maps AD group membership to Django user roles for authorization (e.g., admin access).
-    - Enforces explicit per-view authorization policy declaration using decorators in `api/decorators.py`:
-        - `@authz_public` for endpoints that bypass authorization
-        - `@authz_authenticated` for any authenticated identity
-        - `@authz_roles(...)` for role-protected endpoints
-    - Views in `api.views` that do not declare one of these policies raise `ImproperlyConfigured` at request time.
-    - Strict mode: routed endpoints must be implemented in `api.views`. Third-party endpoints (for example drf-spectacular schema/docs) must be exposed through wrapper views in `api.views` and decorated explicitly (for example with `@authz_public`).
+    - Enforces explicit per-view authorization policy declaration using permission decorators in `api/permissions.py`:
+        - `@authz_public` — no authentication or authorization required (e.g. health probes)
+        - `@authz_authenticated` — IIS authentication required, no specific role (e.g. API docs)
+        - `@authz_roles(...)` — IIS authentication required with one or more specific roles
+    - Every view must declare exactly one of these decorators. Views that omit a decorator raise `ImproperlyConfigured` at request time. There are no default permissions — future developers must explicitly set authorization at the view level.
+    - LDAP group membership is only queried for views decorated with `@authz_roles(...)`. Views using `@authz_public` or `@authz_authenticated` never trigger an LDAP lookup.
+    - Strict mode: routed endpoints must be implemented in `api.views`. Third-party endpoints (for example drf-spectacular schema/docs) must be exposed through wrapper views in `api.views` and decorated explicitly.
 
 1. Service Layer
     - Implements business workflows.
@@ -188,24 +189,43 @@ sequenceDiagram
 
         AuthN->>AuthZ: Forward authenticated request
 
-        AuthZ->>Cache: Lookup cached group membership
-        alt Cache hit
-            Cache-->>AuthZ: Cached roles
-        else Cache miss
-            AuthZ->>AD: LDAP query (user group membership)
-            AD-->>AuthZ: Group list
-            AuthZ->>AuthZ: Map AD groups → app roles
-            AuthZ->>Cache: Store roles (TTL = LDAP_CACHE_TTL)
+        AuthZ->>AuthZ: Read view decorator policy
+
+        alt @authz_public (e.g. /api/health/)
+            AuthZ->>View: Forward request (no auth checks)
+        else @authz_authenticated (e.g. /api/docs/)
+            AuthZ->>AuthZ: Verify REMOTE_USER present
+            alt Not authenticated
+                AuthZ-->>FE: 401 Unauthorized
+            else Authenticated
+                AuthZ->>View: Forward request (no role check)
+            end
+        else @authz_roles(...) (e.g. /api/user/)
+            AuthZ->>AuthZ: Verify REMOTE_USER present
+            alt Not authenticated
+                AuthZ-->>FE: 401 Unauthorized
+            else Authenticated
+                AuthZ->>Cache: Lookup cached group membership
+                alt Cache hit
+                    Cache-->>AuthZ: Cached roles
+                else Cache miss
+                    AuthZ->>AD: LDAP query (user group membership)
+                    AD-->>AuthZ: Group list
+                    AuthZ->>AuthZ: Map AD groups → app roles
+                    AuthZ->>Cache: Store roles (TTL = LDAP_CACHE_TTL)
+                end
+
+                alt No matching roles
+                    AuthZ-->>FE: 403 Forbidden
+                else Roles match
+                    AuthZ->>AuthZ: Attach roles to request.user
+                    AuthZ->>View: Forward authorized request
+                end
+            end
         end
 
-        alt No matching roles
-            AuthZ-->>FE: 403 Forbidden
-        else Roles assigned
-            AuthZ->>AuthZ: Attach roles to request.user
-            AuthZ->>View: Forward authorized request
-            View->>View: Process & build response
-            View-->>FE: 200 OK (response payload)
-        end
+        View->>View: Process & build response
+        View-->>FE: 200 OK (response payload)
     end
     FE-->>User: Render UI
 ```
@@ -226,13 +246,15 @@ backend/
 │   │   ├── request_id.py
 │   │   ├── authentication.py
 │   │   └── authorization.py
+│   ├── permissions.py
 │   ├── urls.py
 │   ├── views/
 │   │   ├── __init__.py
 │   │   ├── health.py
 │   │   └── user.py
 │   ├── serializers/
-│   │   └── __init__.py
+│   │   ├── __init__.py
+│   │   └── user_serializer.py
 │   ├── services/
 │   │   └── __init__.py
 │   ├── adapters/
@@ -269,9 +291,9 @@ backend/
 | `api/views/health.py`               | API                  | Health check endpoint |
 | `api/views/docs.py`                 | API                  | Wrapper views for schema/docs endpoints with explicit auth policy |
 | `api/views/user.py`                 | API                  | User identity and role endpoint |
-| `api/decorators.py`                 | API/Cross-cutting    | Per-view authorization decorators (`@authz_public`, `@authz_authenticated`, `@authz_roles`) |
-| `api/permissions.py`                | API                  | DRF permission classes for role-based access control (RBAC) |
-| `api/serializers/`                  | API                  | DRF serialization/deserialization contracts |
+| `api/permissions.py`                | API/Cross-cutting    | Per-view authorization permission decorators (`@authz_public`, `@authz_authenticated`, `@authz_roles`) |
+| `api/serializers/`                  | API                  | Serializer package and export surface |
+| `api/serializers/user_serializer.py`| API                  | User identity/roles response serializer (`UserSerializer`) |
 | `api/services/`                     | Service              | Business logic, orchestration, state machines, normalization & mapping |
 | `api/adapters/`                     | Source Adapter       | External data-source access with resilience patterns |
 | `api/migrations/`                   | Persistence          | Django migration history |
@@ -348,11 +370,27 @@ Designed to be called by the frontend on initial load to populate a context prov
 
 **API Schema** (`GET /api/schema/`)
 - Serves the OpenAPI 3 schema generated by `drf-spectacular`.
-- Implemented via `api/views/docs.py` wrapper view marked `@authz_public`.
+- Requires IIS authentication (any domain user) but no specific application role.
+- Implemented via `api/views/docs.py` wrapper view marked `@authz_authenticated`.
+
+*Response* `401 Unauthorized` — No `REMOTE_USER` header present.
+```json
+{
+    "detail": "Authentication credentials were not provided."
+}
+```
 
 **API Documentation** (`GET /api/docs/`)
 - Serves the interactive Swagger UI for exploring and testing endpoints.
-- Implemented via `api/views/docs.py` wrapper view marked `@authz_public`.
+- Requires IIS authentication (any domain user) but no specific application role.
+- Implemented via `api/views/docs.py` wrapper view marked `@authz_authenticated`.
+
+*Response* `401 Unauthorized` — No `REMOTE_USER` header present.
+```json
+{
+    "detail": "Authentication credentials were not provided."
+}
+```
 
 ### Automated Testing Strategy (`pytest`)
 
@@ -403,6 +441,36 @@ DEV_USER_ROLE=admin
 ```
 
 **Security Note: Development mode must never be enabled in production or on any externally accessible environment. This is enforced at startup: the application will refuse to start if `AUTH_MODE=dev` is set while `DEBUG=False`. This check runs in the Django `AppConfig.ready()` method to guarantee it cannot be bypassed.**
+
+#### Adding a New Role
+
+The authorization system is designed so that new roles can be introduced without modifying middleware or permissions infrastructure. Only three files need to change:
+
+1. **`api/constants.py`** — Define the role constant and map the AD group:
+    ```python
+    ROLE_AUDITOR: Final[str] = "app_auditor"
+    ROLES = (ROLE_ADMIN, ROLE_VIEWER, ROLE_AUDITOR)
+
+    AD_GROUP_TO_ROLE_MAP: dict[str, str] = {
+        "CN=app-admins,OU=Groups,DC=corp,DC=local": ROLE_ADMIN,
+        "CN=app-viewers,OU=Groups,DC=corp,DC=local": ROLE_VIEWER,
+        "CN=app-auditors,OU=Groups,DC=corp,DC=local": ROLE_AUDITOR,
+    }
+    ```
+
+2. **`api/views/<view>.py`** — Use the role in a view's `@authz_roles` decorator:
+    ```python
+    from api.permissions import authz_roles
+    from api.constants import ROLE_AUDITOR
+
+    @authz_roles(ROLE_AUDITOR)
+    class AuditLogView(APIView):
+        ...
+    ```
+
+3. **`api/urls.py`** — Wire the new view into the URL configuration.
+
+No changes to `api/permissions.py` or `api/middleware/authorization.py` are required. The middleware resolves roles dynamically from `AD_GROUP_TO_ROLE_MAP` and the `@authz_roles` decorator accepts arbitrary role strings.
 
 #### Configuration Reference
 
@@ -545,6 +613,8 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
     Ensure the application pool identity has read access to the backend directory.
 
+    > **Note:** With Anonymous Authentication disabled, IIS will challenge *all* requests, including `/api/health/`. The health endpoint is marked `@authz_public` at the Django layer (no `REMOTE_USER` or role required), but IIS will still require Windows Authentication before the request reaches Django. If load balancers or uptime monitors cannot authenticate via Kerberos/NTLM, consider configuring an IIS URL Authorization rule to allow anonymous access to `/api/health/` only.
+
     **Sanity check:** Browse to `https://<server>/api/user/` from a domain-joined machine. The browser should negotiate Kerberos/NTLM silently and return a `200` with the user's `username` and `roles`. If you receive a `401`, check that Windows Authentication is enabled and Anonymous is disabled. If you receive a `403`, confirm the user is a member of a configured AD group.
 
 1. **Configure LDAP Connectivity**
@@ -572,14 +642,16 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
     | Step | Action | Expected Result |
     |------|--------|-----------------|
-    | 1 | `GET /api/health/` | `200 OK` — `{"status": "ok"}` |
+    | 1 | `GET /api/health/` | `200 OK` — `{"status": "ok"}` (no authentication required) |
     | 2 | `GET /api/user/` (unauthenticated / anonymous) | `401 Unauthorized` |
     | 3 | `GET /api/user/` (domain user in configured AD group) | `200 OK` — `{"username": "DOMAIN\\user", "roles": [...]}` |
     | 4 | `GET /api/user/` (domain user not in any configured group) | `403 Forbidden` |
-    | 5 | `GET /api/docs/` | Swagger UI loads successfully |
-    | 6 | `GET /api/schema/` | OpenAPI 3 JSON schema returned |
+    | 5 | `GET /api/docs/` (unauthenticated) | `401 Unauthorized` |
+    | 6 | `GET /api/docs/` (any domain user) | Swagger UI loads successfully |
+    | 7 | `GET /api/schema/` (unauthenticated) | `401 Unauthorized` |
+    | 8 | `GET /api/schema/` (any domain user) | OpenAPI 3 JSON schema returned |
 
-    **Sanity check:** All six checks pass. Review the IIS access logs and confirm requests are logged with the expected HTTP status codes and authenticated usernames.
+    **Sanity check:** All eight checks pass. Review the IIS access logs and confirm requests are logged with the expected HTTP status codes and authenticated usernames.
 
 ---
 

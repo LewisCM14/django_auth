@@ -2,6 +2,7 @@
 
 Includes role definitions, LDAP mappings, and other application-wide constants.
 """
+
 from __future__ import annotations
 
 from typing import Final

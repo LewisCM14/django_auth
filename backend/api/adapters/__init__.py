@@ -18,15 +18,15 @@ Example adapter structure:
 
     class LDAPAdapter:
         '''Wraps ldap3 connection and group membership queries.'''
-        
+
         def get_user_groups(self, username: str) -> list[str]:
             '''Query user's AD group memberships. Returns raw group DNs.'''
             # LDAP connection, search, and minimal parsing only
             ...
-    
+
     class UserDirectoryAdapter:
         '''Wraps call to corporate user directory service.'''
-        
+
         def get_user_details(self, employee_id: str) -> dict:
             '''Fetch employee record from directory. Returns raw data.'''
             # HTTP GET, minimal parsing only

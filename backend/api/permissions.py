@@ -1,77 +1,63 @@
-"""DRF permission classes for role-based access control.
+"""Per-view authorization permissions.
 
-Provides permission classes for enforcing role-based access control (RBAC)
-on API endpoints. Roles are attached to the request.user object by the
-authorization middleware.
+Decorators that attach policy metadata to views so the authorization
+middleware can enforce access consistently with no implicit defaults.
 """
+
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
-from rest_framework.permissions import BasePermission
-from rest_framework.request import Request
+AUTHZ_POLICY_ATTR = "authz_policy"
+AUTHZ_ROLES_ATTR = "authz_roles"
 
 
-class HasAnyRole(BasePermission):
-    """Permission: user must have any of the required roles.
-    
-    For views that allow multiple roles (e.g., admin OR viewer).
-    Subclasses should define the `required_roles` attribute as a list of strings.
+def authz_public(view_obj: Any) -> Any:
+    """Mark a view as public (no authentication or authorization).
+
+    Use for endpoints that must be reachable without any credentials,
+    e.g. load-balancer health probes.
+
+    Args:
+        view_obj: Function-based view callable or class-based view class.
+
+    Returns:
+        The same object with authorization metadata attached.
+    """
+    setattr(view_obj, AUTHZ_POLICY_ATTR, "public")
+    return view_obj
+
+
+def authz_authenticated(view_obj: Any) -> Any:
+    """Mark a view as requiring IIS authentication only (no role check).
+
+    Use for endpoints accessible to any domain user who has authenticated
+    through IIS, without requiring a specific application role.
+
+    Args:
+        view_obj: Function-based view callable or class-based view class.
+
+    Returns:
+        The same object with authorization metadata attached.
+    """
+    setattr(view_obj, AUTHZ_POLICY_ATTR, "authenticated")
+    return view_obj
+
+
+def authz_roles(*roles: str) -> Callable[[Any], Any]:
+    """Mark a view as requiring at least one of the provided roles.
+
+    Args:
+        *roles: Application role names allowed to access the view.
+
+    Returns:
+        Decorator that adds policy and required role metadata.
     """
 
-    required_roles: list[str] = []
+    def decorator(view_obj: Any) -> Any:
+        """Attach role-based authorization metadata to a view object."""
+        setattr(view_obj, AUTHZ_POLICY_ATTR, "roles")
+        setattr(view_obj, AUTHZ_ROLES_ATTR, tuple(roles))
+        return view_obj
 
-    def has_permission(self, request: Request, view: Any) -> bool:
-        """Check if user has any of the required roles.
-        
-        Args:
-            request: The HTTP request object.
-            view: The view being accessed.
-        
-        Returns:
-            True if user has any required role, False otherwise.
-        """
-        if not self.required_roles:
-            return True
-        user_roles: list[str] = getattr(request.user, "roles", [])
-        return any(role in user_roles for role in self.required_roles)
-
-
-class IsAppAdmin(BasePermission):
-    """Permission: user must have app_admin role."""
-
-    def has_permission(self, request: Request, view: Any) -> bool:
-        """Check if user has app_admin role.
-        
-        Args:
-            request: The HTTP request object.
-            view: The view being accessed.
-        
-        Returns:
-            True if user has app_admin role, False otherwise.
-        """
-        user_roles: list[str] = getattr(request.user, "roles", [])
-        return "app_admin" in user_roles
-
-
-class IsAppViewer(BasePermission):
-    """Permission: user must have app_viewer role."""
-
-    def has_permission(self, request: Request, view: Any) -> bool:
-        """Check if user has app_viewer role.
-        
-        Args:
-            request: The HTTP request object.
-            view: The view being accessed.
-        
-        Returns:
-            True if user has app_viewer role, False otherwise.
-        """
-        user_roles: list[str] = getattr(request.user, "roles", [])
-        return "app_viewer" in user_roles
-
-
-class IsAdminOrViewer(HasAnyRole):
-    """Permission: user must have app_admin OR app_viewer role."""
-
-    required_roles = ["app_admin", "app_viewer"]
+    return decorator

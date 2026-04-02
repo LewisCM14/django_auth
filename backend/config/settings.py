@@ -4,6 +4,7 @@ Loads configuration from environment variables (.env file) and validates
 required settings at startup. Supports two authentication modes: 'dev' for
 local development and 'iis' for Windows IIS deployment.
 """
+
 from __future__ import annotations
 
 import os
@@ -28,7 +29,9 @@ if not SECRET_KEY:
 DEBUG: bool = os.getenv("DEBUG", "False").strip().lower() == "true"
 
 ALLOWED_HOSTS_RAW: str = os.getenv("ALLOWED_HOSTS", "")
-ALLOWED_HOSTS: list[str] = [host.strip() for host in ALLOWED_HOSTS_RAW.split(",") if host.strip()]
+ALLOWED_HOSTS: list[str] = [
+    host.strip() for host in ALLOWED_HOSTS_RAW.split(",") if host.strip()
+]
 if not ALLOWED_HOSTS:
     ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
@@ -48,13 +51,13 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "api.middleware.request_id.RequestIdMiddleware",
-    "api.middleware.authentication.AuthenticationMiddleware",
-    "api.middleware.authorization.AuthorizationMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "api.middleware.authentication.AuthenticationMiddleware",
+    "api.middleware.authorization.AuthorizationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -117,6 +120,12 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Authentication and authorization are handled entirely by middleware
+    # (api.middleware.authentication and api.middleware.authorization).
+    # DRF's own auth/permission system is deliberately disabled so that
+    # every view must declare an explicit policy via @authz_public or
+    # @authz_roles(...).  AllowAny prevents DRF from rejecting requests
+    # before the middleware has a chance to enforce the view-level policy.
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     "DEFAULT_RENDERER_CLASSES": [
