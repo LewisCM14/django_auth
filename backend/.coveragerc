@@ -1,0 +1,12 @@
+[run]
+source = .
+omit =
+    tests/*
+    manage.py
+    .venv/*
+
+[report]
+show_missing = True
+
+[xml]
+output = coverage.xml

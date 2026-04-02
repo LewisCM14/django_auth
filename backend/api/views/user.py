@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.http import HttpRequest, HttpResponseNotAllowed, JsonResponse
+from django.http import HttpRequest, JsonResponse
+from django.views import View
 
 from api.constants import ROLE_ADMIN, ROLE_VIEWER
 from api.permissions import authz_roles
@@ -15,15 +16,19 @@ from api.serializers import UserSerializer
 
 
 @authz_roles(ROLE_ADMIN, ROLE_VIEWER)
-def UserView(request: HttpRequest) -> JsonResponse | HttpResponseNotAllowed:
-    """Return the authenticated user's identity and application roles."""
-    if request.method != "GET":
-        return HttpResponseNotAllowed(["GET"])
+class UserView(View):
+    """Return the authenticated user's identity and application roles.
 
-    user = request.user
-    payload: dict[str, Any] = {
-        "username": user.get_username(),
-        "roles": list(getattr(user, "roles", [])),
-    }
-    serializer = UserSerializer(payload)
-    return JsonResponse(serializer.data)
+    Only GET is supported. Django's View dispatch returns 405 Method Not
+    Allowed automatically for any other method — no manual check required.
+    """
+
+    def get(self, request: HttpRequest) -> JsonResponse:
+        """Return username and resolved application roles."""
+        user = request.user
+        payload: dict[str, Any] = {
+            "username": user.get_username(),
+            "roles": list(getattr(user, "roles", [])),
+        }
+        serializer = UserSerializer(payload)
+        return JsonResponse(serializer.data)

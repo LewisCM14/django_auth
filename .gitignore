@@ -9,4 +9,7 @@ uv.lock
 .mypy_cache/
 .coverage
 htmlcov/
+coverage.xml
+.scannerwork/
 .DS_Store
+sonar.md

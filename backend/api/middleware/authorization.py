@@ -166,7 +166,7 @@ class AuthorizationMiddleware:
         if isinstance(class_roles, tuple):
             return class_roles
 
-        return tuple()
+        return ()
 
     def _ensure_authenticated(self, request: HttpRequest) -> None:
         """Ensure request has an authenticated user identity."""

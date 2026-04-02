@@ -132,10 +132,4 @@ Run the full test suite:
 ```bash
 uv run pytest
 ```
-
-
-Run tests with coverage:
-
-```bash
-uv run pytest --cov=api --cov=config --cov-report=term-missing
-```
+> Coverage is configured in `pytest.ini` and runs automatically — a terminal summary and `coverage.xml` (for SonarQube) are produced on every run.

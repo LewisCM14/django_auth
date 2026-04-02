@@ -467,3 +467,41 @@ def test_query_ldap_groups_placeholder_returns_empty_list() -> None:
     from api.middleware.authorization import query_ldap_groups
 
     assert query_ldap_groups("DOMAIN\\someone") == []
+
+
+class TestAuthorizationMiddlewareHelpers:
+    """Unit tests for middleware helper methods covering FBV code paths.
+
+    The production views are all class-based, so the helpers' FBV branches
+    (policy/roles set directly on the function object) are only reachable
+    via these targeted unit tests.  They remain in the middleware to support
+    function-based views written by future developers.
+    """
+
+    @staticmethod
+    def get_response(request: Any) -> Mock:
+        response = Mock()
+        response.status_code = 200
+        return response
+
+    def test_get_view_policy_reads_attribute_directly_from_function(self) -> None:
+        """_get_view_policy returns policy set directly on a FBV callable."""
+        middleware = AuthorizationMiddleware(self.get_response)
+
+        def fbv() -> None:
+            return None
+
+        fbv.authz_policy = "public"  # type: ignore[attr-defined]
+
+        assert middleware._get_view_policy(fbv) == "public"
+
+    def test_get_required_roles_reads_attribute_directly_from_function(self) -> None:
+        """_get_required_roles returns roles set directly on a FBV callable."""
+        middleware = AuthorizationMiddleware(self.get_response)
+
+        def fbv() -> None:
+            return None
+
+        fbv.authz_roles = (ROLE_ADMIN,)  # type: ignore[attr-defined]
+
+        assert middleware._get_required_roles(fbv) == (ROLE_ADMIN,)

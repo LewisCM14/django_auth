@@ -14,5 +14,5 @@ from api.views.user import UserView
 
 urlpatterns: list[URLPattern] = [
     path("health/", HealthView.as_view(), name="health"),
-    path("user/", UserView, name="user"),
+    path("user/", UserView.as_view(), name="user"),
 ]

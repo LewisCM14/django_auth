@@ -17,3 +17,4 @@ dependencies:
   - mypy
   - django-stubs
   - djangorestframework-stubs
+  - ruff>=0.15.9

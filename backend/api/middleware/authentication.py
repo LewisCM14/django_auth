@@ -71,7 +71,7 @@ class AuthenticationMiddleware:
         if auth_mode == "dev":
             # Development mode: inject mock user
             dev_user_identity = os.getenv("DEV_USER_IDENTITY", "dev_admin")
-            user, created = User.objects.get_or_create(username=dev_user_identity)
+            user, _ = User.objects.get_or_create(username=dev_user_identity)
             request.user = user
             # Django's AuthenticationMiddleware stores this attribute dynamically at runtime.
             # The HttpRequest type stub does not declare it, so this ignore is intentional.
@@ -82,7 +82,7 @@ class AuthenticationMiddleware:
                 "HTTP_REMOTE_USER"
             )
             if remote_user:
-                user, created = User.objects.get_or_create(username=remote_user)
+                user, _ = User.objects.get_or_create(username=remote_user)
                 request.user = user
                 # Same rationale as above: _cached_user exists at runtime but is not typed on HttpRequest.
                 request._cached_user = user  # type: ignore[attr-defined]
