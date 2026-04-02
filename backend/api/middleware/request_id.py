@@ -31,6 +31,8 @@ class RequestIdMiddleware(MiddlewareMixin):
         # Generate a new UUID4 for this request
         request_id = str(uuid.uuid4())
         # Attach to request object for downstream access
+        # HttpRequest has no 'request_id' attribute; we attach it dynamically
+        # so downstream middleware and views can access the correlation ID.
         request.request_id = request_id  # type: ignore[attr-defined]
 
     def process_response(

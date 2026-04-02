@@ -21,6 +21,7 @@ from django.test import override_settings
 
 from api.constants import ROLE_ADMIN, ROLE_VIEWER
 from api.middleware.authorization import AuthorizationMiddleware
+from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
 
 
 def _make_roles_view(
@@ -39,6 +40,9 @@ def _make_roles_view(
 
     # Django's URL resolver attaches `view_class` dynamically to the callable
     # returned by `as_view()`. In tests we emulate that runtime shape.
+    # Django's as_view() dynamically attaches view_class to the callable at
+    # runtime. We replicate that here so the middleware resolves policy/roles
+    # from the class. All 'attr-defined' ignores in this file are the same pattern.
     wrapped_view.view_class = RolesView  # type: ignore[attr-defined]
     return wrapped_view
 
@@ -306,6 +310,7 @@ class TestAuthorizationMiddlewareIISMode:
         def wrapped_view() -> None:
             return None
 
+        # Emulates Django's as_view() runtime attachment (see _make_roles_view).
         wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
@@ -332,6 +337,7 @@ class TestAuthorizationMiddlewareIISMode:
         def wrapped_view() -> None:
             return None
 
+        # Emulates Django's as_view() runtime attachment (see _make_roles_view).
         wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
@@ -484,24 +490,26 @@ class TestAuthorizationMiddlewareHelpers:
         response.status_code = 200
         return response
 
-    def test_get_view_policy_reads_attribute_directly_from_function(self) -> None:
-        """_get_view_policy returns policy set directly on a FBV callable."""
+    def test_get_view_attr_reads_policy_from_function(self) -> None:
+        """_get_view_attr returns policy set directly on a FBV callable."""
         middleware = AuthorizationMiddleware(self.get_response)
 
         def fbv() -> None:
             return None
 
+        # Simulates @authz_public setting the attribute directly on a FBV.
         fbv.authz_policy = "public"  # type: ignore[attr-defined]
 
-        assert middleware._get_view_policy(fbv) == "public"
+        assert middleware._get_view_attr(fbv, AUTHZ_POLICY_ATTR, str) == "public"
 
-    def test_get_required_roles_reads_attribute_directly_from_function(self) -> None:
-        """_get_required_roles returns roles set directly on a FBV callable."""
+    def test_get_view_attr_reads_roles_from_function(self) -> None:
+        """_get_view_attr returns roles set directly on a FBV callable."""
         middleware = AuthorizationMiddleware(self.get_response)
 
         def fbv() -> None:
             return None
 
+        # Simulates @authz_roles setting the attribute directly on a FBV.
         fbv.authz_roles = (ROLE_ADMIN,)  # type: ignore[attr-defined]
 
-        assert middleware._get_required_roles(fbv) == (ROLE_ADMIN,)
+        assert middleware._get_view_attr(fbv, AUTHZ_ROLES_ATTR, tuple) == (ROLE_ADMIN,)

@@ -85,7 +85,7 @@ class AuthorizationMiddleware:
             )
 
         try:
-            policy = self._get_view_policy(view_func)
+            policy = self._get_view_attr(view_func, AUTHZ_POLICY_ATTR, str)
             if policy is None:
                 raise ImproperlyConfigured(
                     "Every view in api.views must declare an authorization policy "
@@ -103,9 +103,13 @@ class AuthorizationMiddleware:
                 self._ensure_authenticated(request)
                 username = self._get_authenticated_username(request)
                 user_roles = self._get_user_roles(username)
+                # Django's User model has no 'roles' attribute; we attach it
+                # dynamically so the view can read resolved roles from the request.
                 request.user.roles = user_roles  # type: ignore[union-attr]
 
-                required_roles = self._get_required_roles(view_func)
+                required_roles: tuple[str, ...] = (
+                    self._get_view_attr(view_func, AUTHZ_ROLES_ATTR, tuple) or ()
+                )
                 if not required_roles:
                     raise ImproperlyConfigured(
                         "@authz_roles decorator requires at least one role."
@@ -142,31 +146,14 @@ class AuthorizationMiddleware:
         class_module = getattr(view_class, "__module__", "")
         return isinstance(class_module, str) and class_module.startswith("api.views")
 
-    def _get_view_policy(self, view_func: Any) -> str | None:
-        """Get authorization policy from function-based or class-based view."""
-        direct_policy = getattr(view_func, AUTHZ_POLICY_ATTR, None)
-        if isinstance(direct_policy, str):
-            return direct_policy
-
+    def _get_view_attr(self, view_func: Any, attr: str, expected_type: type) -> Any:
+        """Read a decorator attribute from a view function or its view_class."""
+        direct = getattr(view_func, attr, None)
+        if isinstance(direct, expected_type):
+            return direct
         view_class = getattr(view_func, "view_class", None)
-        class_policy = getattr(view_class, AUTHZ_POLICY_ATTR, None)
-        if isinstance(class_policy, str):
-            return class_policy
-
-        return None
-
-    def _get_required_roles(self, view_func: Any) -> tuple[str, ...]:
-        """Return required roles from @authz_roles decorator metadata."""
-        direct_roles = getattr(view_func, AUTHZ_ROLES_ATTR, None)
-        if isinstance(direct_roles, tuple):
-            return direct_roles
-
-        view_class = getattr(view_func, "view_class", None)
-        class_roles = getattr(view_class, AUTHZ_ROLES_ATTR, None)
-        if isinstance(class_roles, tuple):
-            return class_roles
-
-        return ()
+        class_val = getattr(view_class, attr, None)
+        return class_val if isinstance(class_val, expected_type) else None
 
     def _ensure_authenticated(self, request: HttpRequest) -> None:
         """Ensure request has an authenticated user identity."""
@@ -201,16 +188,17 @@ class AuthorizationMiddleware:
 
         cached_roles = cache.get(cache_key)
         if cached_roles is not None:
+            # cache.get() returns Any; we know the stored value is list[str]
+            # because we are the only writer (see cache.set below).
             return cached_roles  # type: ignore[no-any-return]
 
         ad_groups = query_ldap_groups(username)
 
-        roles = []
-        for ad_group in ad_groups:
-            if ad_group in AD_GROUP_TO_ROLE_MAP:
-                role = AD_GROUP_TO_ROLE_MAP[ad_group]
-                if role not in roles:
-                    roles.append(role)
+        roles = list(
+            dict.fromkeys(
+                AD_GROUP_TO_ROLE_MAP[g] for g in ad_groups if g in AD_GROUP_TO_ROLE_MAP
+            )
+        )
 
         cache_ttl = getattr(settings, "LDAP_CACHE_TTL", 300)
         cache.set(cache_key, roles, cache_ttl)
