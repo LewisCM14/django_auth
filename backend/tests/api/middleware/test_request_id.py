@@ -8,13 +8,13 @@ import pytest
 from django.test import Client
 
 
-@pytest.mark.django_db
 class TestRequestIdMiddleware:
     """Tests for the request-level ID tracking middleware."""
 
     @pytest.fixture(autouse=True)
-    def setup(self) -> None:
-        """Set up test client for each test."""
+    def setup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Set up test client and force IIS mode (no DB auth side effects)."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
         self.client = Client()
 
     def test_response_contains_x_request_id_header(self) -> None:

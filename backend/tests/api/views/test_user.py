@@ -6,21 +6,23 @@ import pytest
 from django.test import Client
 
 
-@pytest.mark.django_db
 class TestUserView:
     """Tests for `GET /api/user/` and method constraints."""
 
+    @pytest.mark.django_db
     def test_admin_user_returns_200(self, admin_client: Client) -> None:
         """Admin client receives HTTP 200 from user endpoint."""
         response = admin_client.get("/api/user/")
         assert response.status_code == 200
 
+    @pytest.mark.django_db
     def test_admin_user_response_contains_username(self, admin_client: Client) -> None:
         """Admin response includes expected username."""
         response = admin_client.get("/api/user/")
         assert response.status_code == 200
         assert response.json()["username"] == "DOMAIN\\admin_user"
 
+    @pytest.mark.django_db
     def test_admin_user_response_contains_admin_role(
         self, admin_client: Client
     ) -> None:
@@ -29,11 +31,13 @@ class TestUserView:
         assert response.status_code == 200
         assert "app_admin" in response.json()["roles"]
 
+    @pytest.mark.django_db
     def test_viewer_user_returns_200(self, viewer_client: Client) -> None:
         """Viewer client receives HTTP 200 from user endpoint."""
         response = viewer_client.get("/api/user/")
         assert response.status_code == 200
 
+    @pytest.mark.django_db
     def test_viewer_user_response_contains_viewer_role(
         self, viewer_client: Client
     ) -> None:
@@ -47,6 +51,7 @@ class TestUserView:
         response = unauthenticated_client.get("/api/user/")
         assert response.status_code == 401
 
+    @pytest.mark.django_db
     def test_unauthorized_returns_403(self, unauthorized_client: Client) -> None:
         """Authenticated user without mapped roles is rejected with 403 JSON."""
         response = unauthorized_client.get("/api/user/")
@@ -55,16 +60,19 @@ class TestUserView:
             "detail": "You do not have permission to perform this action."
         }
 
+    @pytest.mark.django_db
     def test_method_not_allowed_post(self, admin_client: Client) -> None:
         """POST is not allowed on user endpoint."""
         response = admin_client.post("/api/user/")
         assert response.status_code == 405
 
+    @pytest.mark.django_db
     def test_method_not_allowed_put(self, admin_client: Client) -> None:
         """PUT is not allowed on user endpoint."""
         response = admin_client.put("/api/user/")
         assert response.status_code == 405
 
+    @pytest.mark.django_db
     def test_method_not_allowed_delete(self, admin_client: Client) -> None:
         """DELETE is not allowed on user endpoint."""
         response = admin_client.delete("/api/user/")

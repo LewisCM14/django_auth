@@ -6,13 +6,13 @@ import pytest
 from django.test import Client
 
 
-@pytest.mark.django_db
 class TestHealthView:
     """Tests for the health check view."""
 
     @pytest.fixture(autouse=True)
-    def setup(self) -> None:
-        """Set up test client for each test."""
+    def setup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Set up test client and force IIS mode (no DB auth side effects)."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
         self.client = Client()
 
     def test_health_returns_200(self) -> None:

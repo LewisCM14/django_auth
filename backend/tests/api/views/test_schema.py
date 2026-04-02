@@ -6,15 +6,16 @@ import pytest
 from django.test import Client
 
 
-@pytest.mark.django_db
 class TestSchemaEndpoints:
     """Tests for authenticated schema and docs routes."""
 
+    @pytest.mark.django_db
     def test_schema_returns_200(self, admin_client: Client) -> None:
         """GET /api/schema/ returns HTTP 200 for authenticated users."""
         response = admin_client.get("/api/schema/")
         assert response.status_code == 200
 
+    @pytest.mark.django_db
     def test_schema_returns_json(self, admin_client: Client) -> None:
         """GET /api/schema/ returns an OpenAPI JSON payload."""
         response = admin_client.get("/api/schema/")
@@ -26,11 +27,13 @@ class TestSchemaEndpoints:
             or "application/json" in content_type
         )
 
+    @pytest.mark.django_db
     def test_docs_returns_200(self, admin_client: Client) -> None:
         """GET /api/docs/ returns HTTP 200 for authenticated users."""
         response = admin_client.get("/api/docs/")
         assert response.status_code == 200
 
+    @pytest.mark.django_db
     def test_docs_returns_html(self, admin_client: Client) -> None:
         """GET /api/docs/ returns an HTML response."""
         response = admin_client.get("/api/docs/")
