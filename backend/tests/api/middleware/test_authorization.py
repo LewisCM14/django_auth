@@ -7,7 +7,7 @@ must explicitly set authorization at the view level.
 
 Role resolution happens only when a view requires roles:
 - Dev mode: reads ``DEV_USER_ROLE`` environment variable
-- IIS mode: queries LDAP (with caching) for AD group membership
+- IIS mode: queries LDAP (per-request) for AD group membership
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
-from django.core.cache import cache
 from django.test import override_settings
 
 from api.constants import ROLE_ADMIN, ROLE_VIEWER
@@ -56,10 +55,6 @@ class TestAuthorizationMiddlewareDevMode:
         response = Mock()
         response.status_code = 200
         return response
-
-    def setup_method(self) -> None:
-        """Clear cache before each test."""
-        cache.clear()
 
     @override_settings(DEBUG=True)
     def test_dev_mode_assigns_admin_role_from_env(self) -> None:
@@ -113,10 +108,6 @@ class TestAuthorizationMiddlewareIISMode:
         response = Mock()
         response.status_code = 200
         return response
-
-    def setup_method(self) -> None:
-        """Clear cache before each test."""
-        cache.clear()
 
     @override_settings(DEBUG=False)
     def test_user_with_admin_group_gets_admin_role(self) -> None:
@@ -205,8 +196,8 @@ class TestAuthorizationMiddlewareIISMode:
         assert result.status_code == 401
 
     @override_settings(DEBUG=False)
-    def test_ldap_result_is_cached(self) -> None:
-        """LDAP query result for a user is cached across requests."""
+    def test_ldap_queried_on_every_request(self) -> None:
+        """LDAP is queried on every request — results are not cached."""
         middleware = AuthorizationMiddleware(self.get_response)
         view_func = _make_roles_view()
 
@@ -215,35 +206,12 @@ class TestAuthorizationMiddlewareIISMode:
 
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
                 request1 = Mock()
-                request1.user = Mock(username="DOMAIN\\cached_user")
+                request1.user = Mock(username="DOMAIN\\repeat_user")
                 middleware.process_view(request1, view_func, [], {})
                 assert mock_ldap.call_count == 1
 
                 request2 = Mock()
-                request2.user = Mock(username="DOMAIN\\cached_user")
-                middleware.process_view(request2, view_func, [], {})
-                assert mock_ldap.call_count == 1
-
-    @override_settings(DEBUG=False)
-    def test_cache_respects_ttl(self) -> None:
-        """Cache expires after LDAP_CACHE_TTL; next request queries LDAP."""
-        middleware = AuthorizationMiddleware(self.get_response)
-        view_func = _make_roles_view()
-        username = "DOMAIN\\ttl_user"
-
-        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
-            mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
-
-            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                request1 = Mock()
-                request1.user = Mock(username=username)
-                middleware.process_view(request1, view_func, [], {})
-                assert mock_ldap.call_count == 1
-
-                cache.delete(f"ldap_groups_{username}")
-
-                request2 = Mock()
-                request2.user = Mock(username=username)
+                request2.user = Mock(username="DOMAIN\\repeat_user")
                 middleware.process_view(request2, view_func, [], {})
                 assert mock_ldap.call_count == 2
 

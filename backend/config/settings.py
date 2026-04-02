@@ -145,12 +145,10 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "0.1.0",
 }
 
-LDAP_CACHE_TTL: int = int(os.getenv("LDAP_CACHE_TTL", "300"))
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
         "LOCATION": "django-auth-cache",
-        "TIMEOUT": LDAP_CACHE_TTL,
     }
 }
 
