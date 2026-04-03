@@ -6,12 +6,14 @@
 - [Requirement](#requirement)
 - [Design](#design)
     - [Application Architecture Diagram](#application-architecture-diagram)
+    - [Application Technology](#application-technology)
     - [Workflow](#workflow)
     - [Structure](#structure)
     - [Endpoints](#endpoints)
     - [Logging](#logging)
     - [Exception Handling](#exception-handling)
     - [Caching](#caching)
+    - [Rate Limiting](#rate-limiting)
     - [Automated Testing Strategy](#automated-testing-strategy)
     - [Local Development](#local-development)
 - [Deployment](#deployment)
@@ -26,12 +28,11 @@
 - All authentication must be handled by IIS; the application will not implement its own login or token validation. User identity is provided to the backend via IIS environment variables or headers.
 - For authorization, the application must query Active Directory via LDAP to determine user group membership and map to application roles.
     - Specifically `ldap3>=2.9`.
-    - LDAP group membership is queried on every request that requires role-based authorization. Results are **not cached** — AD group changes (additions, removals, disablements) must take immediate effect for security. The additional LDAP latency per request is acceptable for this use case.
+    - LDAP group membership is queried on every request that requires role-based authorization. Results are **not cached** — AD group changes (additions, removals, disablement's) must take immediate effect for security.
     - Users not in a configured group are to be denied access to the application.
 - Must integrate with `python-dotenv` for loading environment variables from `.env` files.
 - Must integrate with `django-cors-headers` for Cross-Origin Resource Sharing (CORS) support, enabling both same-origin and cross-origin frontend deployments.
-- All packages must be available through **Anaconda**, prioritizing the `conda-forge` channel, for production deployment on Windows.
-    - Local development uses `uv` with `pyproject.toml` as the primary dependency manifest. `environment.yml` is maintained in parallel for Anaconda.
+- All packages must be available through **Anaconda**, prioritizing the `conda-forge` channel.
     - `django-auth-ldap`, `python-ldap` & `django-auth-adfs` cannot be used as these are not readily available for `Windows` on `conda-forge`.
 - All technologies used must be license free for corporate use.
 - The application must support local development and testing without IIS/AD/LDAP.
@@ -40,6 +41,10 @@
 - The application is to be scope to include the below roles in its current state, with a clear method for adding further roles:
     - `app_admin`
     - `app_viewer`
+- The application must provide a global: Logging, Error, Exception and Rate Limiting solution.
+- The application must offer a server side caching solution.
+
+---
 
 ## Design
 
@@ -57,7 +62,7 @@ flowchart LR
     System["Django Auth &amp; Authorization"]
     AD[("Active Directory")]
 
-    User -- "Windows credentials" --> FE
+    User --> FE
     FE -- "HTTPS" --> System
     System -- "LDAP group membership query" --> AD
 ```
@@ -68,36 +73,110 @@ title: Application Architecture — Level 1
 ---
 flowchart LR
     User(["Corporate User"])
-    FE["Frontend Application\n(Browser)"]
-    AD[("Active Directory\n(LDAP)")]
+    FE["`Frontend Application
+(Browser)`"]
+    AD[("` Active Directory
+(LDAP)`")]
 
-    subgraph IIS_Host["IIS — Windows Server 2022"]
-        WinAuth["Windows\nAuthentication"]
-        Proxy["Reverse Proxy\nHTTPS Termination"]
+    subgraph IIS_Host["`IIS — Windows Server 2022`"]
+        WinAuth["`Windows
+Authentication`"]
+        Proxy["`Reverse Proxy
+HTTPS Termination`"]
     end
 
-    subgraph Django["Django Application — WSGI"]
-        MW_RID["Request-ID\nMiddleware"]
-        MW_AuthN["Authentication\nMiddleware\n(RemoteUserMiddleware)"]
-        MW_AuthZ["Authorization\nMiddleware"]
-        API["API Layer\n(DRF Views &amp; Serializers)"]
-        SVC["Service Layer"]
-        ADP["Source Adapter Layer"]
-        DB[("Persistence Layer\n(Django ORM)")]
+    subgraph Django["`Django Application — WSGI`"]
+        MW_CORS["`CORS
+Middleware`"]
+        MW_RID["`Request-ID
+Middleware`"]
+        MW_AuthN["`Authentication
+Middleware`"]
+        MW_Enforce["`Decorator Enforcement
+Middleware`"]
+        MW_AuthZ["`Authorization
+Middleware`"]
+        API["`API Layer
+(DRF Views &amp; Serializers)`"]
+        SVC["`Service Layer`"]
+        ADP["`Source Adapter Layer`"]
+        DB[("`Persistence Layer
+(Django ORM)`")]
     end
 
-    User -- "Windows credentials" --> FE
+    User --> FE
     FE -- "HTTPS" --> WinAuth
     WinAuth -- "REMOTE_USER" --> Proxy
-    Proxy -- "WSGI (wfastcgi)" --> MW_RID
+    Proxy -- "WSGI (wfastcgi)" --> MW_CORS
+    MW_CORS --> MW_RID
     MW_RID --> MW_AuthN
-    MW_AuthN --> MW_AuthZ
-    MW_AuthZ -- "LDAP lookup\n(per-request, @authz_roles only)" --> AD
+    MW_AuthN --> MW_Enforce
+    MW_Enforce --> MW_AuthZ
+    MW_AuthZ -- "`LDAP lookup
+(per-request, @authz_roles only)`" --> AD
     MW_AuthZ --> API
     API --> SVC
     SVC --> ADP
     SVC --> DB
     ADP -- "External sources" --> ADP
+```
+
+### Application Technology
+
+```mermaid
+---
+title: Application Technology — Level 0
+---
+flowchart TD
+    INFRA["`Infrastructure
+Windows Server 2022  ·  IIS  ·  wfastcgi`"]
+    LANG["`Language
+Python 3.14`"]
+    FW["`Web Framework
+Django 6.0+  ·  Django REST Framework 3.0+`"]
+    AUTH["`Auth &amp; Directory
+IIS Windows Authentication  ·  ldap3  ·  Active Directory`"]
+    LIBS["`Application Libraries
+drf-spectacular  ·  django-cors-headers
+python-dotenv  ·  LocMemCache`"]
+
+    INFRA --> LANG
+    LANG --> FW
+    FW --> AUTH
+    FW --> LIBS
+```
+
+```mermaid
+---
+title: Application Technology — Level 1
+---
+flowchart LR
+    APP(["`Django Auth
+&amp; Authorization`"])
+
+    subgraph Production["`Production Dependencies`"]
+        CORE_L1["`Core Framework
+django >= 6.0.0
+djangorestframework >= 3.0.0`"]
+        AUTH_L1["`Auth &amp; Directory
+ldap3 >= 2.9  ·  Active Directory (LDAP)`"]
+        LIBS_L1["`Libraries
+drf-spectacular  ·  django-cors-headers  ·  python-dotenv`"]
+        INFRA_L1["`Infrastructure
+Python 3.14  ·  Windows Server 2022  ·  IIS  ·  wfastcgi`"]
+    end
+
+    subgraph DevToolchain["`Development Toolchain`"]
+        TEST_L1["`Testing
+pytest  ·  pytest-django  ·  pytest-mock  ·  pytest-cov`"]
+        TYPES_L1["`Static Typing
+mypy  ·  django-stubs  ·  djangorestframework-stubs`"]
+        LINT_L1["`Linting
+ruff >= 0.15.9`"]
+    end
+
+    APP --> Production
+    APP --> DevToolchain
 ```
 
 ### Workflow
@@ -107,14 +186,8 @@ flowchart LR
     - Leverages Django's built-in `RemoteUserMiddleware` and `RemoteUserBackend` to authenticate the IIS-provided `REMOTE_USER`.
     - Uses `ldap3` library to query Active Directory for group membership on every `@authz_roles` request. Results are not cached — AD changes take immediate effect.
     - Maps AD group membership to Django user roles for authorization (e.g., admin access).
-    - Enforces explicit per-view authorization policy declaration using permission decorators in `api/permissions.py`:
-        - `@authz_public` — no authentication or authorization required (e.g. health probes)
-        - `@authz_authenticated` — IIS authentication required, no specific role (e.g. API docs)
-        - `@authz_roles(...)` — IIS authentication required with one or more specific roles
-    - Every view must declare exactly one of these decorators. Views that omit a decorator raise `ImproperlyConfigured` at request time. There are no default permissions — future developers must explicitly set authorization at the view level.
-    - LDAP group membership is only queried for views decorated with `@authz_roles(...)`. Views using `@authz_public` or `@authz_authenticated` never trigger an LDAP lookup.
-    - Strict mode: routed endpoints must be implemented in `api.views`. Third-party endpoints (for example drf-spectacular schema/docs) must be exposed through wrapper views in `api.views` and decorated explicitly.
-    - All unhandled exceptions in DRF views are caught by the custom exception handler (`api/exceptions.py`), which logs the error and returns a standardised error envelope with `request_id` correlation. No per-view `try/except` blocks are needed.
+    - Every view must explicitly apply all three decorator families: authorization (`@authz_*`), rate limiting (`@throttle` / `@throttle_exempt`), and cache policy (`@cache_*`). This is enforced by middleware, and missing decorators raise `ImproperlyConfigured`.
+    - All unhandled exceptions in DRF views are caught by the custom exception handler (`api/exceptions.py`), which logs the error and returns a standardized error envelope with `request_id` correlation. No per-view `try/except` blocks are needed.
     - Per-request access logging (method, path, status, duration, user) is handled by `RequestIdMiddleware`. Views do not implement their own request/response logging.
 
 1. Service Layer
@@ -158,9 +231,7 @@ flowchart TD
         DB[(Django ORM)]
     end
     subgraph Cross_Cutting["Cross-cutting Concerns (spans all layers)"]
-        LOG["Logging — request-ID correlated via contextvars"]
-        EXC["Exception Handler — standardised error envelope"]
-        CACHE[("Cache — LocMemCache / Redis")]
+        CACHE[("Cache — LocMemCache")]
     end
 
     V -->|Raw request data| S
@@ -172,91 +243,90 @@ flowchart TD
     NORM -->|Canonical response| S
     S -->|Serialize output| V
 
-    EXC -.->|Catches unhandled exceptions| V
     CACHE -.->|Adapter data| AD
     CACHE -.->|Computed results| BL
 ```
 
 ```mermaid
 ---
-title: Authentication, Authorization & Cross-cutting Concerns — Level 1
+title: Request Pipeline — Level 1
 ---
 sequenceDiagram
     actor User as Corporate User
     participant FE as Frontend
     participant IIS as IIS (Windows Auth + HTTPS)
     participant RID as Request-ID Middleware
-    participant AuthN as Authentication Middleware<br/>(RemoteUserMiddleware)
+    participant AuthN as Authentication Middleware
+    participant Enforce as Decorator Enforcement Middleware
     participant AuthZ as Authorization Middleware
-    participant Cache as Django Cache
-    participant AD as Active Directory (LDAP)
     participant View as DRF View
-    participant EH as Exception Handler<br/>(api/exceptions.py)
 
     User->>FE: Interact with application
     FE->>IIS: HTTPS request (Kerberos/NTLM)
-    IIS->>IIS: Windows Authentication
-    alt Authentication fails at IIS
+    alt IIS auth fails
         IIS-->>FE: 401 Unauthorized
-    else Authentication succeeds
-        IIS->>RID: WSGI request + REMOTE_USER header
-        RID->>RID: Generate & attach X-Request-ID
-        Note over RID: Store request-ID in contextvars<br/>Log INFO: request received<br/>(method, path, user)
+    else IIS auth succeeds
+        IIS->>RID: WSGI request + REMOTE_USER
+        RID->>RID: Generate X-Request-ID
         RID->>AuthN: Forward request
-
-        alt AUTH_MODE = dev
-            AuthN->>AuthN: Inject mock identity<br/>(DEV_USER_IDENTITY)
-        else AUTH_MODE = iis
-            AuthN->>AuthN: Read REMOTE_USER,<br/>create/update Django User<br/>via RemoteUserBackend
-        end
-
-        AuthN->>AuthZ: Forward authenticated request
-
-        AuthZ->>AuthZ: Read view decorator policy
-
-        alt @authz_public (e.g. /api/health/)
-            AuthZ->>View: Forward request (no auth checks)
-        else @authz_authenticated (e.g. /api/docs/)
-            AuthZ->>AuthZ: Verify REMOTE_USER present
-            alt Not authenticated
-                Note over AuthZ: Log WARNING: 401 denied<br/>(username, path, policy)
-                AuthZ-->>FE: 401 JSON envelope + request_id
-            else Authenticated
-                AuthZ->>View: Forward request (no role check)
-            end
-        else @authz_roles(...) (e.g. /api/user/)
-            AuthZ->>AuthZ: Verify REMOTE_USER present
-            alt Not authenticated
-                Note over AuthZ: Log WARNING: 401 denied<br/>(username, path, policy)
-                AuthZ-->>FE: 401 JSON envelope + request_id
-            else Authenticated
-                AuthZ->>AD: LDAP query (user group membership)
-                AD-->>AuthZ: Group list
-                AuthZ->>AuthZ: Map AD groups → app roles
-
-                alt No matching roles
-                    Note over AuthZ: Log WARNING: 403 denied<br/>(username, path, required roles)
-                    AuthZ-->>FE: 403 JSON envelope + request_id
-                else Roles match
-                    AuthZ->>AuthZ: Attach roles to request.user
-                    AuthZ->>View: Forward authorized request
-                end
+        AuthN->>AuthN: Resolve identity
+        AuthN->>Enforce: Forward authenticated request
+        alt Missing @throttle / @cache_* / @authz_* decorator
+            Enforce-->>FE: 500 ImproperlyConfigured
+        else All decorators present
+            Enforce->>AuthZ: Forward request
+            AuthZ->>AuthZ: Apply @authz_* policy
+            alt Denied (401 / 403)
+                AuthZ-->>FE: 401 / 403 JSON envelope + request_id
+            else Authorized
+                AuthZ->>View: Forward authorized request
+                View->>View: Process & build response
+                View-->>FE: 200 OK
             end
         end
-
-        alt View raises unhandled exception
-            View->>EH: Exception propagates to DRF handler
-            Note over EH: Log ERROR: full traceback<br/>with request-ID correlation
-            EH-->>FE: 500 JSON envelope + request_id<br/>("An unexpected error occurred.")
-        else Normal processing
-            View->>View: Process & build response
-            View-->>FE: 200 OK (response payload)
-        end
-
-        Note over RID: Log INFO: response completed<br/>(status, duration ms, request-ID)
     end
     FE-->>User: Render UI
 ```
+
+```mermaid
+---
+title: Authorization Policy — Level 1
+---
+flowchart TD
+    START(["Request reaches AuthorizationMiddleware"])
+    READ["`Read view @authz_* decorator`"]
+
+    START --> READ
+
+    READ --> PUBLIC{"`@authz_public?`"}
+    PUBLIC -- yes --> PASS_PUB["`Forward to view
+(no auth checks)`"]
+
+    PUBLIC -- no --> AUTHN{"`@authz_authenticated?`"}
+    AUTHN -- yes --> CHK_USER{"`REMOTE_USER
+present?`"}
+    CHK_USER -- no --> R401A["`401 JSON envelope
++ request_id`"]
+    CHK_USER -- yes --> PASS_AUTHN["`Forward to view
+(no role check)`"]
+
+    AUTHN -- no --> ROLES{"`@authz_roles(...)?`"}
+    ROLES -- yes --> CHK_USER2{"`REMOTE_USER
+present?`"}
+    CHK_USER2 -- no --> R401B["`401 JSON envelope
++ request_id`"]
+    CHK_USER2 -- yes --> LDAP["`LDAP query
+(AD group membership)`"]
+    LDAP --> MAP["`Map AD groups → app roles`"]
+    MAP --> CHK_ROLE{"`Required role
+matched?`"}
+    CHK_ROLE -- no --> R403["`403 JSON envelope
++ request_id`"]
+    CHK_ROLE -- yes --> ATTACH["`Attach roles to request.user`"]
+    ATTACH --> PASS_ROLES["`Forward to view`"]
+```
+
+---
 
 ### Structure
 
@@ -274,11 +344,15 @@ backend/
 │   │   ├── __init__.py
 │   │   ├── request_id.py
 │   │   ├── authentication.py
+│   │   ├── enforcement.py
 │   │   └── authorization.py
 │   ├── permissions.py
+│   ├── caching.py
+│   ├── throttling.py
 │   ├── urls.py
 │   ├── views/
 │   │   ├── __init__.py
+│   │   ├── docs.py
 │   │   ├── health.py
 │   │   └── user.py
 │   ├── serializers/
@@ -295,6 +369,27 @@ backend/
 │     ├── urls.py
 │     └── wsgi.py
 ├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── api/
+│   │   ├── middleware/
+│   │   │   ├── test_authentication.py
+│   │   │   ├── test_authorization.py
+│   │   │   ├── test_enforcement.py
+│   │   │   └── test_request_id.py
+│   │   ├── views/
+│   │   │   ├── test_health.py
+│   │   │   ├── test_schema.py
+│   │   │   └── test_user.py
+│   │   ├── test_apps.py
+│   │   ├── test_caching.py
+│   │   ├── test_exceptions.py
+│   │   ├── test_permissions.py
+│   │   └── test_throttling.py
+│   └── config/
+│       ├── test_logging.py
+│       ├── test_settings.py
+│       └── test_wsgi.py
 ├── .env.example
 ├── manage.py
 ├── mypy.ini
@@ -315,6 +410,7 @@ backend/
 | `api/middleware/`                   | API/Cross-cutting    | Middleware package (see below) |
 | `api/middleware/request_id.py`      | Cross-cutting        | Request-ID injection middleware |
 | `api/middleware/authentication.py`  | API                  | `RemoteUserMiddleware` integration and dev-mode identity injection |
+| `api/middleware/enforcement.py`    | API/Cross-cutting    | Decorator enforcement — ensures every view declares `@throttle`/`@cache_*`/`@authz_*` decorators |
 | `api/middleware/authorization.py`   | API                  | LDAP group membership lookup, role mapping, and access control |
 | `api/urls.py`                       | API                  | URL routing to views package |
 | `api/views/`                        | API                  | HTTP request handling, input validation, response shaping |
@@ -322,6 +418,8 @@ backend/
 | `api/views/docs.py`                 | API                  | Wrapper views for schema/docs endpoints with explicit auth policy |
 | `api/views/user.py`                 | API                  | User identity and role endpoint |
 | `api/permissions.py`                | API/Cross-cutting    | Per-view authorization permission decorators (`@authz_public`, `@authz_authenticated`, `@authz_roles`) |
+| `api/caching.py`                    | Cross-cutting        | `@cache_public`, `@cache_private`, `@cache_disabled` decorators — per-view HTTP cache-control policy with enforcement via middleware |
+| `api/throttling.py`                 | Cross-cutting        | `@throttle` and `@throttle_exempt` decorators — per-view, per-user rate limiting with explicit rate strings; `RemoteUserRateThrottle` keyed on `REMOTE_USER` identity |
 | `api/serializers/`                  | API                  | Serializer package and export surface |
 | `api/serializers/user_serializer.py`| API                  | User identity/roles response serializer (`UserSerializer`) |
 | `api/services/`                     | Service              | Business logic, orchestration, state machines, normalization & mapping |
@@ -329,7 +427,14 @@ backend/
 | `api/migrations/`                   | Persistence          | Django migration history |
 | `config/`                           | Cross-cutting        | Django and app configuration (settings, WSGI, logging, etc.) |
 | `config/logging.py`                 | Cross-cutting        | `JsonFormatter` — custom `logging.Formatter` subclass for structured JSON output |
-| `tests/`                            | Cross-cutting        | All automated tests (unit, integration, contract); mirrors backend structure |
+| `tests/`                            | Cross-cutting        | Automated test suite (`pytest`) mirroring source structure |
+| `tests/conftest.py`                 | Cross-cutting        | Shared pytest fixtures and test configuration |
+| `tests/api/`                        | API/Cross-cutting    | API-layer unit and integration tests |
+| `tests/api/middleware/`             | API/Cross-cutting    | Middleware tests (authentication, authorization, enforcement, request-id) |
+| `tests/api/views/`                  | API                  | Endpoint behavior tests (`health`, `schema/docs`, `user`) |
+| `tests/config/`                     | Cross-cutting        | Config/module tests (`settings`, `wsgi`, `logging`) |
+
+---
 
 ### Endpoints
 
@@ -426,10 +531,12 @@ Designed to be called by the frontend on initial load to populate a context prov
     "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 }
 ```
+---
 
 ### Logging
 
 *Structured, correlated logging is essential for enterprise operations — incident triage, security audits, and performance analysis all depend on it. The logging design is deliberately minimal: it provides the infrastructure (configuration, correlation, formatting) so that every module added downstream automatically participates in the same logging pipeline without additional setup.*
+
 
 #### Design Principles
 
@@ -437,8 +544,22 @@ Designed to be called by the frontend on initial load to populate a context prov
 2. **Structured JSON in production** — Production logs are emitted as single-line JSON objects for consistent, machine-parseable output. This simplifies `grep`/`findstr` filtering, integration with Windows Event Forwarding, and future adoption of log aggregation tooling. Development mode uses human-readable console output.
 3. **Per-request access log** — Every HTTP request/response pair is logged once with method, path, status code, duration (ms), user identity, and request-ID. This replaces the need for IIS access logs at the Django layer and provides richer context (e.g., resolved username, authorization policy).
 4. **Security audit trail** — Authorization denials (401, 403) are logged at `WARNING` level with the username (if available), requested path, and denial reason. This satisfies enterprise security audit requirements.
-5. **No sensitive data in logs** — Request bodies, passwords, tokens, and PII beyond the username are never logged. The `REMOTE_USER` header value (corporate username) is the only identity field included.
+5. **No sensitive data in logs** — Request bodies, passwords, tokens, and PII beyond the username should never be logged. The `REMOTE_USER` header value (corporate username) is the only identity field included.
 
+```mermaid
+---
+title: Logging — Level 0
+---
+flowchart LR
+    APP["`Application
+(all layers)`"]
+    PIPE["`Logging Pipeline
+(RequestIdFilter + Formatter)`"]
+    OUT[("`stderr → wfastcgi → IIS`")]
+
+    APP -->|"request_id-correlated log records"| PIPE
+    PIPE --> OUT
+```
 #### Configuration
 
 Logging is configured via Django's `LOGGING` dict in `config/settings.py`, using Python's standard `logging.config.dictConfig` schema.
@@ -468,8 +589,47 @@ The `RequestIdMiddleware` already generates `X-Request-ID` and attaches it to `r
 | `RequestIdMiddleware` | Request received (method, path, user) and response completed (status, duration ms) | `INFO` |
 | `AuthorizationMiddleware` | Access denied: 401 (no identity) or 403 (insufficient roles) with username, path, and policy | `WARNING` |
 | `api/exceptions.py` | Unhandled exceptions caught by the DRF exception handler (full traceback) | `ERROR` |
-| Service layer (future) | Business logic warnings, validation failures | `WARNING` |
-| Adapter layer (future) | External call start, response status, retry attempts, failures | `INFO` / `WARNING` / `ERROR` |
+| Service Layer | Business logic warnings, validation failures | `WARNING` |
+| Adapter Layer | External call start, response status, retry attempts, failures | `INFO` / `WARNING` / `ERROR` |
+
+```mermaid
+---
+title: Logging — Level 1
+---
+flowchart TD
+    subgraph Emitters["`Log Emitters`"]
+        RID_MW["`RequestIdMiddleware
+INFO: request in / response out`"]
+        AUTHZ_MW["`AuthorizationMiddleware
+WARNING: 401 / 403 denials`"]
+        SVC["`Service Layer
+WARNING: business logic`"]
+        ADP["`Adapter Layer
+INFO / WARNING / ERROR: external calls`"]
+        EH["`Exception Handler
+ERROR: unhandled exceptions + traceback`"]
+    end
+
+    subgraph Pipeline["`Logging Pipeline (config/settings.py)`"]
+        CTX["`contextvars.ContextVar
+— request_id`"]
+        FILTER["`RequestIdFilter
+— injects request_id into every record`"]
+        FMT["`Formatter
+json (prod) / text (dev)`"]
+        HANDLER["`StreamHandler → stderr`"]
+    end
+
+    RID_MW -->|"stores"| CTX
+    CTX -.->|"injected into every record"| FILTER
+    RID_MW --> FILTER
+    AUTHZ_MW --> FILTER
+    SVC --> FILTER
+    ADP --> FILTER
+    EH --> FILTER
+    FILTER --> FMT
+    FMT --> HANDLER
+```
 
 #### Log Rotation
 
@@ -477,7 +637,7 @@ The application does not manage log files directly. Both dev and production hand
 
 #### How This Scales
 
-When downstream teams add new modules (services, adapters, views), they simply use Python's standard `logging.getLogger(__name__)`. The request-ID filter ensures correlation is automatic. No logging boilerplate is required beyond:
+When new modules are added downstream (services, adapters, views), use Python's standard `logging.getLogger(__name__)`. The request-ID filter ensures correlation is automatic. No logging boilerplate is required beyond:
 
 ```python
 import logging
@@ -487,9 +647,12 @@ logger.info("Fetched %d records from ERP adapter", count)
 
 The hierarchical logger name (`api.adapters.erp`) inherits the `api` logger's level and handlers, so new modules participate in the logging pipeline with zero configuration.
 
+---
+
 ### Exception Handling
 
 *A centralised exception handler ensures every error response has a consistent shape, is logged with full context, and never leaks internal details to the client. This is critical for enterprise CRUD applications where adapter failures, database errors, and validation issues must all be surfaced predictably to the frontend.*
+
 
 #### Design Principles
 
@@ -498,6 +661,19 @@ The hierarchical logger name (`api.adapters.erp`) inherits the `api` logger's le
 3. **No internal details leaked** — Stack traces, database errors, and adapter exception messages are logged server-side at `ERROR` level but never included in the response body. The client receives only a safe, generic message for 5xx errors.
 4. **DRF integration** — Wired as the custom `EXCEPTION_HANDLER` in `REST_FRAMEWORK` settings. Catches all exceptions raised within DRF views (including serializer validation errors) and exceptions re-raised by middleware.
 
+```mermaid
+---
+title: Exception Handling — Level 0
+---
+flowchart LR
+    APP["`DRF View or Middleware`"]
+    EH["`api_exception_handler
+(api/exceptions.py)`"]
+    CLIENT["`Client`"]
+
+    APP -->|"exception raised"| EH
+    EH -->|"JSON error envelope + request_id"| CLIENT
+```
 #### Error Response Contract
 
 All error responses conform to this shape:
@@ -523,9 +699,10 @@ Standard HTTP status codes and their `detail` values:
 | `403` | `"You do not have permission to perform this action."` | Authenticated but lacks required role |
 | `404` | `"Not found."` | URL does not match any route, or object lookup failed |
 | `405` | `"Method '{method}' not allowed."` | HTTP method not supported by the view |
+| `429` | `"Request was throttled. Expected available in {wait} second(s)."` | Rate limit exceeded (DRF throttling) |
 | `500` | `"An unexpected error occurred."` | Unhandled exception (details logged server-side only) |
 
-#### Implementation
+#### Configuration
 
 The exception handler lives in `api/exceptions.py` and is a single function:
 
@@ -550,9 +727,41 @@ REST_FRAMEWORK = {
 
 The authorization middleware catches `AuthenticationFailed` and `PermissionDenied` in its own `try/except` and returns `JsonResponse` directly. The middleware runs *before* DRF's view layer, so the DRF exception handler does not apply there. Both paths (middleware and DRF handler) produce the same error envelope shape, including `request_id`.
 
+```mermaid
+---
+title: Exception Handling — Level 1
+---
+flowchart TD
+    REQ["`Incoming Request`"]
+
+    subgraph MW_Path["`Middleware Path (pre-DRF)`"]
+        AUTHZ["`AuthorizationMiddleware
+try / except`"]
+        MW_RESP["`JsonResponse — 401 / 403
++ request_id`"]
+    end
+
+    subgraph DRF_Path["`DRF Path`"]
+        VIEW["`DRF View`"]
+        EH["`api_exception_handler`"]
+        LOG_ERR["`ERROR log — full traceback
++ request_id correlation`"]
+        DRF_RESP["`JSON Response — 4xx / 5xx
++ request_id`"]
+    end
+
+    REQ --> AUTHZ
+    AUTHZ -->|"AuthenticationFailed / PermissionDenied"| MW_RESP
+    AUTHZ -->|"passes through"| VIEW
+    VIEW -->|"APIException / Http404 / PermissionDenied"| EH
+    VIEW -->|"unhandled exception"| EH
+    EH -->|"unhandled only"| LOG_ERR
+    EH --> DRF_RESP
+```
+
 #### How This Scales
 
-As downstream teams add CRUD views, services, and adapters:
+As CRUD views, services, and adapters are added downstream:
 
 - **Serializer validation errors** (400) are handled automatically by DRF — the exception handler enriches them with `request_id`.
 - **Object not found** (`get_object_or_404`) produces a 404 with the standard envelope — no custom handling needed.
@@ -561,39 +770,28 @@ As downstream teams add CRUD views, services, and adapters:
 
 No per-view `try/except` blocks are needed. The handler is the single funnel for all error responses.
 
+---
+
 ### Caching
 
 *Server-side caching reduces latency, database load, and external API call volume. The caching design provides a production-ready backend configuration and establishes conventions for cache key management that scale as the application adds CRUD endpoints and adapter integrations.*
 
 #### Design Principles
 
-1. **Environment-aware backend** — Development and test environments use Django's `LocMemCache` (zero infrastructure). Production can run with `LocMemCache` initially (no Redis dependency) and can switch to `django-redis` when a Redis service is available. Redis is the recommended production target for shared cache across IIS worker processes and persistence across application restarts.
-2. **LDAP group membership is not cached** — AD group changes (additions, removals, disablements) must take immediate effect for security. Every `@authz_roles` request queries LDAP directly. The additional latency is acceptable for this use case. Caching is reserved for application data (adapter responses, service-layer results) where eventual consistency is appropriate.
-3. **HTTP cache headers** — Views can declare caching intent via Django's `@cache_control` decorator or `Cache-Control` header manipulation.
-4. **Cache key conventions** — A documented naming convention prevents key collisions as the application grows.
+1. **Environment-aware backend** — Development, test, and single-server production environments use Django's `LocMemCache` (zero infrastructure). 
+2. **LDAP group membership is not cached** — AD group changes (additions, removals, disablements) must take immediate effect for security. Every `@authz_roles` request queries LDAP directly. This is a design intention. Caching is reserved for application data (adapter responses, service-layer results) where eventual consistency is appropriate.
+3. **HTTP cache policy decorators** — Views declare caching intent via `@cache_public`, `@cache_private`, or `@cache_disabled`; middleware enforces explicit declaration on every view.
+4. **Cache key conventions** — A centralized key builder and guardrail tests prevent collisions as the application grows.
 
 #### Cache Backend Configuration
 
-`config/settings.py` selects the cache backend based on the `CACHE_BACKEND` environment variable:
+`config/settings.py` configures Django's `LocMemCache` backend for this application.
 
-| `CACHE_BACKEND` | Backend | Use case |
-|-----------------|---------|----------|
-| `redis` | `django_redis.cache.RedisCache` | Production (IIS). Shared across worker processes, survives restarts. |
-| `locmem` (default) | `django.core.cache.backends.locmem.LocMemCache` | Development, testing. Zero infrastructure. |
+| Backend | Use case |
+|---------|----------|
+| `django.core.cache.backends.locmem.LocMemCache` | Development, testing, and single-server production. Zero infrastructure. |
 
-Redis configuration:
-```
-CACHE_BACKEND=redis
-REDIS_URL=redis://localhost:6379/0
-```
-
-If Redis is not available in a given production environment, keep:
-```
-CACHE_BACKEND=locmem
-```
-This is supported, but cache entries are process-local and not shared across IIS workers.
-
-`django-redis` is available on `conda-forge` and is BSD-licensed (corporate-safe). No additional dependencies beyond Redis itself (typically already available in enterprise environments or trivially installable).
+This is the expected mode for this deployment model. Cache entries are process-local, which is acceptable on a single server.
 
 #### Cache Key Conventions
 
@@ -605,35 +803,187 @@ As the application grows to include CRUD operations and multiple adapters, a con
 | `view:{view_name}:{query_hash}` | `view:order_list:a3f8c1...` | View-level response caching |
 | `service:{domain}:{operation}:{params_hash}` | `service:reporting:monthly_summary:b7e2d4...` | Service-layer computed results |
 
-These are conventions, not enforced by framework code. They are documented here so downstream teams adopt them consistently.
+These conventions are implemented in `api/cache_keys.py` and enforced by test guardrails that fail when application code uses literal cache keys instead of the shared builders.
 
 #### HTTP Cache Headers
 
-For BFF endpoints serving read-heavy data to frontends:
+Every view must declare an explicit cache policy decorator from `api/caching.py`. The `DecoratorEnforcementMiddleware` enforces this at request time — views without a decorator raise `ImproperlyConfigured`. There are no implicit defaults.
 
-- **Authenticated endpoints** default to `Cache-Control: private, no-cache` — the browser stores the response but revalidates on every request. This is appropriate for user-specific data (`/api/user/`).
-- **Public endpoints** (`/api/health/`) can use `Cache-Control: public, max-age=5` to allow intermediate proxies to cache briefly.
-- **Write endpoints** (POST/PUT/DELETE, added by downstream teams) should return `Cache-Control: no-store`.
+Three decorators are available:
 
-These are applied via Django's `@cache_control` decorator or set directly on the response. The application does not enforce HTTP cache headers globally — individual views opt in.
+- **`@cache_public(max_age=N)`** — `Cache-Control: public, max-age=N`. Allows intermediate proxies and the browser to cache the response. Appropriate for unauthenticated, non-sensitive endpoints (e.g., `/api/health/`).
+- **`@cache_private`** — `Cache-Control: private, no-cache`. The browser may store the response but must revalidate on every request. Appropriate for authenticated, user-specific data (e.g., `/api/user/`).
+- **`@cache_disabled`** — `Cache-Control: no-store`. Neither proxies nor the browser should cache the response. Appropriate for write endpoints and dynamic documentation.
+
+Each decorator sets a `_cache_policy` metadata attribute on the view (used by the enforcement check) and wraps `dispatch` to apply the `Cache-Control` header to every response.
+
+Decorator ordering at the view level: `@throttle` outermost, then `@cache_*`, then `@authz_*` innermost. Guardrail tests enforce this ordering.
+
+Why this order is important for maintainability:
+
+- **Prevents accidental caching metadata on throttled denials** — keeping `@throttle` outermost ensures short-circuited `429` responses are not passed through cache-header wrappers in custom view paths.
+- **Keeps policy intent readable at a glance** — the same top-to-bottom pattern on every view makes code review and incident triage faster.
+- **Avoids subtle behavior drift** — consistent ordering removes class/function decoration variance as endpoints are added, reducing regressions that are hard to spot in review.
+- **Supports stable guardrail automation** — one canonical order lets AST-based tests validate policy structure with low noise.
+
+    ```python
+    @throttle("60/minute")
+    @cache_public(max_age=5)
+    @authz_public
+    class HealthView(APIView):
+        ...
+    ```
 
 #### Cache Invalidation
 
 For CRUD applications, cache invalidation follows a write-through pattern:
 
 1. **Service-layer writes** (create, update, delete) explicitly invalidate related cache keys after a successful database commit.
+    
+    ```python
+    from django.db import transaction
+    from django.core.cache import cache
+
+    from api.cache_keys import service_key, view_key
+
+
+    def update_order(order_id: str, payload: dict[str, object]) -> dict[str, object]:
+        # ...perform DB update...
+
+        def _invalidate() -> None:
+            cache.delete(service_key("orders", "detail", {"order_id": order_id}))
+            cache.delete(view_key("order_list", {"status": "open", "page": 1}))
+
+        transaction.on_commit(_invalidate)
+        return {"order_id": order_id, "updated": True}
+    ```
+
 2. **Adapter-level caching** uses TTL-based expiry. Adapters set a TTL appropriate to the data source's freshness requirements. Manual invalidation is available but optional.
+    
+    ```python
+    from django.core.cache import cache
 
-LDAP group membership is not cached and therefore requires no invalidation strategy. AD changes take effect on the next request.
+    from api.cache_keys import adapter_key
 
-No automatic cache invalidation framework is imposed — this avoids hidden complexity. The convention is explicit: if a service writes data, it deletes the corresponding cache keys.
+
+    def get_invoice(invoice_id: str) -> dict[str, object]:
+        key = adapter_key("erp", "invoice", invoice_id)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        data = {"id": invoice_id, "status": "paid"}  # replace with real adapter call
+        cache.set(key, data, timeout=300)  # TTL: 5 minutes
+        return data
+    ```
+
+    *If a downstream client-side workflow needs data to roll over at a fixed wall-clock time (for example every Friday at 17:00), compute the timeout dynamically and still pass seconds to `cache.set`*:
+
+    ```python
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+
+    def seconds_until_weekly_cutoff(
+        *,
+        weekday: int,
+        hour: int,
+        minute: int,
+        tz_name: str = "Europe/London",
+    ) -> int:
+        """Return seconds until the next weekly cutoff.
+
+        weekday uses Python's datetime convention: Monday=0 ... Sunday=6.
+        """
+        now = datetime.now(ZoneInfo(tz_name))
+        days_ahead = (weekday - now.weekday()) % 7
+        cutoff = (now + timedelta(days=days_ahead)).replace(
+            hour=hour,
+            minute=minute,
+            second=0,
+            microsecond=0,
+        )
+        if cutoff <= now:
+            cutoff += timedelta(days=7)
+        return int((cutoff - now).total_seconds())
+
+
+    # Example usage: expire cache at next Friday 17:00 local business time.
+    timeout = seconds_until_weekly_cutoff(weekday=4, hour=17, minute=0)
+    cache.set(key, data, timeout=timeout)
+    ```
+
+3. LDAP group membership is not cached and therefore requires no invalidation strategy. AD changes take effect on the next request.
+
+**No automatic cache invalidation framework is imposed — this avoids hidden complexity. The convention is explicit: if a service writes data, it deletes the corresponding cache keys.**
 
 #### How This Scales
 
-- **Adding a new adapter**: The adapter caches responses using `cache.set(f"adapter:{source}:{resource}:{id}", data, ttl)`. No framework changes needed.
-- **Adding CRUD views**: The service layer invalidates relevant cache keys on write. List views can optionally cache their responses with `cache.set(f"view:{name}:{hash}", response, ttl)`.
-- **Switching cache backend**: Change `CACHE_BACKEND=redis` and `REDIS_URL` in `.env`. All existing `cache.get()`/`cache.set()` calls work unchanged because they use Django's cache framework API.
-- **Multiple cache backends**: If needed (e.g., separate Redis databases for LDAP cache vs. adapter cache), Django supports multiple named caches. Add entries to `CACHES` dict and use `caches['adapter']` in adapter code.
+- **Adding a new adapter**: The adapter caches responses using `adapter_key(...)` with `cache.get()/cache.set(..., timeout=<seconds>)`. No framework changes needed.
+- **Adding CRUD views**: The service layer invalidates relevant `service_key(...)` / `view_key(...)` entries on write (preferably via `transaction.on_commit`).
+
+---
+
+### Rate Limiting
+
+*Rate limiting protects the application from excessive request volume — whether from misbehaving clients, runaway frontend polling loops, or deliberate abuse. An enterprise-grade BFF must enforce per-user request budgets to ensure fair resource allocation across all corporate users and to protect downstream dependencies (LDAP, database, external adapters) from cascading overload.*
+
+#### Design Principles
+
+1. **Built-in DRF throttling** — Rate limiting builds on DRF's `SimpleRateThrottle`, which is already bundled with `djangorestframework`. No new dependencies are required.
+2. **Per-user identity** — Throttle counters are keyed on the authenticated `REMOTE_USER` identity (via a custom throttle class) rather than client IP. This is critical in enterprise environments where all users may share a small number of NAT/proxy IP addresses. Unauthenticated requests (e.g., `/api/health/`) fall back to IP-based keying.
+3. **Explicit per-view rates** — Each view declares its rate limit via the `@throttle("rate")` decorator, or explicitly opts out with `@throttle_exempt`. The `DecoratorEnforcementMiddleware` enforces that every view declares one or the other — views without a throttle decorator raise `ImproperlyConfigured` at request time. Rates live alongside the view code they protect, not in centralized settings or environment variables. This keeps limits visible, auditable, and co-located with the endpoint they govern.
+4. **Cache-backed counters** — Throttle state is stored in Django's cache framework (the same `CACHES` backend used elsewhere). In the default single-server deployment, `LocMemCache` process-local counters are sufficient. 
+5. **Standard error response** — Throttled requests receive a `429 Too Many Requests` response using the standard error envelope (`detail` + `request_id`). A `Retry-After` header indicates the number of seconds until the next request is allowed.
+6. **Layered defense** — DRF throttling is the application-layer rate limiter. For network-level volumetric protection, IIS's **Dynamic IP Restrictions** module can be enabled as a complementary layer. The two operate independently.
+
+#### Configuration
+
+Rate limiting is implemented via a `@throttle` decorator and a custom throttle class, both in `api/throttling.py`.
+
+**`@throttle(rate)` decorator** (`api/throttling.py`):
+
+A single decorator that accepts a DRF rate string (e.g. `"60/minute"`, `"10/hour"`) and applies per-view rate limiting. It works with DRF `APIView` classes, Django `View` classes, and plain function-based views.
+
+For DRF `APIView` subclasses, the decorator sets `throttle_classes` so DRF's built-in throttle machinery activates. For Django `View` subclasses and function-based views, the decorator wraps the dispatch/call with a manual throttle check and returns a `429 JsonResponse` on denial.
+
+**`@throttle_exempt` decorator** (`api/throttling.py`):
+
+Marks a view as explicitly exempt from rate limiting. Sets `_throttle_rate = None` so the enforcement check passes (attribute is present) while `RemoteUserRateThrottle.allow_request` allows all requests through (rate is `None`). Use this instead of simply omitting the `@throttle` decorator — omission triggers an `ImproperlyConfigured` error.
+
+**Custom throttle class** (`api/throttling.py`):
+
+`RemoteUserRateThrottle` extends DRF's `SimpleRateThrottle`. It reads the rate from the view's `_throttle_rate` attribute (set by the `@throttle` decorator) and overrides `get_cache_key` to extract user identity from `REMOTE_USER`. Cache key scopes are derived from the view class name automatically, isolating counters per endpoint.
+
+#### Throttle Response Contract
+
+When a request exceeds its rate limit, the response is:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 23
+X-Request-ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+```json
+{
+    "detail": "Request was throttled. Expected available in 23 seconds.",
+    "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+The `detail` and `request_id` fields match the standard error envelope. The `Retry-After` header is set automatically. Throttle denials are logged at `WARNING` level by the request-ID middleware (via the normal response logging path — the 429 status code appears in the access log).
+
+> **Note:** DRF views that use non-JSON renderers (e.g., `SchemaView` returns `application/vnd.oai.openapi`, `SwaggerDocsView` returns `text/html`) will render the 429 response body through their own renderer, not as JSON. The `429` status code and `Retry-After` header are always present regardless of renderer. The JSON error envelope applies to views using DRF's default `JSONRenderer` (the common case for API endpoints).
+
+#### How This Scales
+
+- **Adding a new endpoint**: Add `@throttle("100/minute")` to the view class or function. No settings changes needed.
+- **Adjusting limits**: Change the rate string in the decorator and redeploy. Rates are version-controlled alongside the view code.
+- **Exempting internal services**: If a service account needs higher limits, create a second throttle class with elevated rates and apply it to specific views via `throttle_classes = [...]`.
+- **Burst protection**: `RemoteUserRateThrottle` uses DRF's simple fixed-window algorithm. For more sophisticated burst protection (sliding window, token bucket), the throttle class can be swapped without changing view code.
+
+---
 
 ### Automated Testing Strategy (`pytest`)
 
@@ -666,7 +1016,7 @@ No automatic cache invalidation framework is imposed — this avoids hidden comp
 
 ### Local Development
 
-*To support local development and testing without requiring IIS, Active Directory, or LDAP, the backend provides a **development mode** that bypasses/mocks authentication and authorization. This enables developers to run the application and all tests locally with minimal setup. Environment variables are loaded from `.env` files using `python-dotenv`. Local development uses `uv` for dependency management (via `pyproject.toml`), while production deployments on Windows use Anaconda (via `environment.yml`). The two manifests describe the same dependency set; `pyproject.toml` is the primary source of truth.*
+*To support local development and testing without requiring IIS, Active Directory, or LDAP, the backend provides a **development mode** that bypasses/mocks authentication and authorization. This enables developers to run the application and all tests locally with minimal setup. Environment variables are loaded from `.env` files using `python-dotenv`.*
 
 - A configuration option (environment variable `AUTH_MODE=dev`) is available to switch the backend into development mode.
 - In development mode:
@@ -725,8 +1075,7 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `DEV_USER_ROLE`          | dev only | `admin`, `viewer`        | `admin`     | Role assigned to the mock user in dev mode. |
 | `LDAP_SERVER_URI`        | iis only | LDAP URI                 | —           | Active Directory LDAP server URI (e.g., `ldap://dc.corp.local`). |
 | `LDAP_BASE_DN`           | iis only | Distinguished name       | —           | Base DN for LDAP group searches. |
-| `CACHE_BACKEND`          | No       | `locmem`, `redis`        | `locmem`    | Cache backend. Use `redis` in production for cross-process shared cache. |
-| `REDIS_URL`              | prod     | Redis URI                | —           | Redis connection URL (e.g., `redis://localhost:6379/0`). Required when `CACHE_BACKEND=redis`. |
+| `CACHE_BACKEND`          | No       | `locmem`                 | `locmem`    | Cache backend for this application (process-local cache). |
 | `LOG_LEVEL`              | No       | Python log level name    | `WARNING`   | Root logger level. Overrides the default for production tuning. |
 | `LOG_FORMAT`             | No       | `json`, `text`           | `text`      | Log output format. Use `json` in production for structured, machine-parseable output. |
 | `ALLOWED_HOSTS`          | Yes      | Comma-separated hosts    | —           | Django `ALLOWED_HOSTS` setting. |
@@ -747,7 +1096,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     conda activate django_auth
     ```
 
-    **Sanity check:** Run `python --version` and confirm it outputs `3.14.x`. Run `conda list` and verify `django`, `djangorestframework`, `ldap3`, `drf-spectacular`, `django-cors-headers`, `django-redis`, and `python-dotenv` are all present.
+    **Sanity check:** Run `python --version` and confirm it outputs `3.14.x`. Run `conda list` and verify `django`, `djangorestframework`, `ldap3`, `drf-spectacular`, `django-cors-headers`, and `python-dotenv` are all present.
 
 1. **Configure Environment Variables**
 
@@ -762,13 +1111,6 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     LDAP_BASE_DN=DC=corp,DC=local
     LOG_FORMAT=json
     CACHE_BACKEND=locmem
-    ```
-
-    Optional (recommended when Redis is available):
-
-    ```
-    CACHE_BACKEND=redis
-    REDIS_URL=redis://localhost:6379/0
     ```
 
     Optionally set `CORS_ALLOWED_ORIGINS` if the frontend is served from a different origin.

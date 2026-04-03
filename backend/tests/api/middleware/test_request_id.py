@@ -10,7 +10,11 @@ import pytest
 from django.http import HttpResponse
 from django.test import Client, RequestFactory
 
-from api.middleware.request_id import RequestIdFilter, RequestIdMiddleware, request_id_var
+from api.middleware.request_id import (
+    RequestIdFilter,
+    RequestIdMiddleware,
+    request_id_var,
+)
 
 
 class TestRequestIdMiddleware:
@@ -133,8 +137,13 @@ class TestRequestIdFilter:
         request_id_var.set("test-correlation-id")
         f = RequestIdFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="test message", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="test message",
+            args=(),
+            exc_info=None,
         )
         f.filter(record)
 
@@ -150,8 +159,13 @@ class TestRequestIdFilter:
         # request_id_var already reset to "-" by the setup fixture
         f = RequestIdFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="test message", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="test message",
+            args=(),
+            exc_info=None,
         )
         f.filter(record)
 

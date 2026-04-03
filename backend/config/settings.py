@@ -57,6 +57,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "api.middleware.authentication.AuthenticationMiddleware",
+    "api.middleware.enforcement.DecoratorEnforcementMiddleware",
     "api.middleware.authorization.AuthorizationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -146,35 +147,19 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "0.1.0",
 }
 
-CACHE_BACKEND: str = os.getenv("CACHE_BACKEND", "locmem").strip().lower()
-REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
-
-if CACHE_BACKEND == "redis":
-    if not REDIS_URL:
-        raise ImproperlyConfigured(
-            "REDIS_URL is required when CACHE_BACKEND=redis."
-        )
-    CACHES = {
-        "default": {
-            "BACKEND": "django_redis.cache.RedisCache",
-            "LOCATION": REDIS_URL,
-            "OPTIONS": {
-                "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            },
-        }
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "django-auth-cache",
     }
-else:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "django-auth-cache",
-        }
-    }
+}
 
 CSRF_TRUSTED_ORIGINS: list[str] = []
 
 LOG_FORMAT: str = os.getenv("LOG_FORMAT", "text").strip().lower()
-LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG" if AUTH_MODE == "dev" else "WARNING").strip().upper()
+LOG_LEVEL: str = (
+    os.getenv("LOG_LEVEL", "DEBUG" if AUTH_MODE == "dev" else "WARNING").strip().upper()
+)
 
 
 LOGGING: dict[str, Any] = {

@@ -93,7 +93,9 @@ class RequestIdMiddleware(MiddlewareMixin):
         duration_ms: float = (time.monotonic() - start) * 1000
         # Resolve the username — authenticated user or anonymous.
         user = getattr(request, "user", None)
-        username: str = user.get_username() if user and user.is_authenticated else "anonymous"
+        username: str = (
+            user.get_username() if user and user.is_authenticated else "anonymous"
+        )
         logger.info(
             "%s %s %s %.1fms %s",
             request.method,

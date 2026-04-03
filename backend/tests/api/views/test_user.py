@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from django.core.cache import cache
 from django.test import Client
+
+from api.views.user import UserView
 
 
 class TestUserView:
@@ -64,7 +67,10 @@ class TestUserView:
         """Authenticated user without mapped roles is rejected with 403 JSON."""
         response = unauthorized_client.get("/api/user/")
         assert response.status_code == 403
-        assert response.json()["detail"] == "You do not have permission to perform this action."
+        assert (
+            response.json()["detail"]
+            == "You do not have permission to perform this action."
+        )
 
     @pytest.mark.django_db
     def test_method_not_allowed_post(self, admin_client: Client) -> None:
@@ -83,3 +89,34 @@ class TestUserView:
         """DELETE is not allowed on user endpoint."""
         response = admin_client.delete("/api/user/")
         assert response.status_code == 405
+
+    @pytest.mark.django_db
+    def test_user_returns_429_when_throttled(
+        self, admin_client: Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Second rapid request returns 429 with standard error envelope."""
+        cache.clear()
+        monkeypatch.setattr(UserView, "_throttle_rate", "1/minute")
+
+        first = admin_client.get("/api/user/")
+        second = admin_client.get("/api/user/")
+
+        assert first.status_code == 200
+        assert second.status_code == 429
+        payload = second.json()
+        assert "throttled" in payload["detail"].lower()
+        assert "request_id" in payload
+
+    @pytest.mark.django_db
+    def test_user_throttle_includes_retry_after(
+        self, admin_client: Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """429 response includes a Retry-After header."""
+        cache.clear()
+        monkeypatch.setattr(UserView, "_throttle_rate", "1/minute")
+
+        admin_client.get("/api/user/")
+        response = admin_client.get("/api/user/")
+
+        assert response.status_code == 429
+        assert response["Retry-After"].isdigit()

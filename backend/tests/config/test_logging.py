@@ -30,43 +30,48 @@ def _make_record(msg: str = "hello", **extras: str) -> logging.LogRecord:
     return record
 
 
-def test_json_formatter_output_shape(formatter: JsonFormatter) -> None:
-    """Formatted output is valid JSON with all required keys."""
-    record = _make_record("test message")
-    output = json.loads(formatter.format(record))
+class TestJsonFormatter:
+    """Tests for JsonFormatter output structure and field mapping."""
 
-    assert set(output.keys()) == {"timestamp", "level", "logger", "request_id", "message"}
+    def test_output_shape(self, formatter: JsonFormatter) -> None:
+        """Formatted output is valid JSON with all required keys."""
+        record = _make_record("test message")
+        output = json.loads(formatter.format(record))
 
+        assert set(output.keys()) == {
+            "timestamp",
+            "level",
+            "logger",
+            "request_id",
+            "message",
+        }
 
-def test_json_formatter_includes_request_id_from_record(formatter: JsonFormatter) -> None:
-    """request_id from the log record extras appears in the JSON output."""
-    known_id = "abc-123"
-    record = _make_record("msg", request_id=known_id)
-    output = json.loads(formatter.format(record))
+    def test_includes_request_id_from_record(self, formatter: JsonFormatter) -> None:
+        """request_id from the log record extras appears in the JSON output."""
+        known_id = "abc-123"
+        record = _make_record("msg", request_id=known_id)
+        output = json.loads(formatter.format(record))
 
-    assert output["request_id"] == known_id
+        assert output["request_id"] == known_id
 
+    def test_defaults_request_id_when_absent(self, formatter: JsonFormatter) -> None:
+        """request_id defaults to '-' when not set on the record."""
+        record = _make_record("msg")
+        output = json.loads(formatter.format(record))
 
-def test_json_formatter_defaults_request_id_when_absent(formatter: JsonFormatter) -> None:
-    """request_id defaults to '-' when not set on the record."""
-    record = _make_record("msg")
-    output = json.loads(formatter.format(record))
+        assert output["request_id"] == "-"
 
-    assert output["request_id"] == "-"
+    def test_correct_level_and_logger(self, formatter: JsonFormatter) -> None:
+        """level and logger fields reflect the log record's values."""
+        record = _make_record("msg")
+        output = json.loads(formatter.format(record))
 
+        assert output["level"] == "INFO"
+        assert output["logger"] == "test.logger"
 
-def test_json_formatter_correct_level_and_logger(formatter: JsonFormatter) -> None:
-    """level and logger fields reflect the log record's values."""
-    record = _make_record("msg")
-    output = json.loads(formatter.format(record))
+    def test_message_content(self, formatter: JsonFormatter) -> None:
+        """message field contains the formatted log message."""
+        record = _make_record("hello world")
+        output = json.loads(formatter.format(record))
 
-    assert output["level"] == "INFO"
-    assert output["logger"] == "test.logger"
-
-
-def test_json_formatter_message_content(formatter: JsonFormatter) -> None:
-    """message field contains the formatted log message."""
-    record = _make_record("hello world")
-    output = json.loads(formatter.format(record))
-
-    assert output["message"] == "hello world"
+        assert output["message"] == "hello world"

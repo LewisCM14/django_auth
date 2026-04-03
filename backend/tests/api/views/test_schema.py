@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from django.core.cache import cache
 from django.test import Client
+
+from api.views.docs import SchemaView, SwaggerDocsView
 
 
 class TestSchemaEndpoints:
@@ -51,3 +54,59 @@ class TestSchemaEndpoints:
         """GET /api/docs/ returns 401 without IIS authentication."""
         response = unauthenticated_client.get("/api/docs/")
         assert response.status_code == 401
+
+    @pytest.mark.django_db
+    def test_schema_returns_429_when_throttled(
+        self, admin_client: Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Second rapid schema request returns 429."""
+        cache.clear()
+        monkeypatch.setattr(SchemaView, "_throttle_rate", "1/minute")
+
+        first = admin_client.get("/api/schema/")
+        second = admin_client.get("/api/schema/")
+
+        assert first.status_code == 200
+        assert second.status_code == 429
+
+    @pytest.mark.django_db
+    def test_schema_throttle_includes_retry_after(
+        self, admin_client: Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Schema 429 response includes a Retry-After header."""
+        cache.clear()
+        monkeypatch.setattr(SchemaView, "_throttle_rate", "1/minute")
+
+        admin_client.get("/api/schema/")
+        response = admin_client.get("/api/schema/")
+
+        assert response.status_code == 429
+        assert response["Retry-After"].isdigit()
+
+    @pytest.mark.django_db
+    def test_docs_returns_429_when_throttled(
+        self, admin_client: Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Second rapid docs request returns 429."""
+        cache.clear()
+        monkeypatch.setattr(SwaggerDocsView, "_throttle_rate", "1/minute")
+
+        first = admin_client.get("/api/docs/")
+        second = admin_client.get("/api/docs/")
+
+        assert first.status_code == 200
+        assert second.status_code == 429
+
+    @pytest.mark.django_db
+    def test_docs_throttle_includes_retry_after(
+        self, admin_client: Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Docs 429 response includes a Retry-After header."""
+        cache.clear()
+        monkeypatch.setattr(SwaggerDocsView, "_throttle_rate", "1/minute")
+
+        admin_client.get("/api/docs/")
+        response = admin_client.get("/api/docs/")
+
+        assert response.status_code == 429
+        assert response["Retry-After"].isdigit()

@@ -1,7 +1,7 @@
 """Authorization middleware.
 
-Enforces explicit per-view authorization policy via decorators.
-Every view under ``api.views`` must declare one of:
+Enforces per-view authorization policy via the ``authz_policy`` attribute
+set by the permission decorators in ``api.permissions``:
 
 - ``@authz_public`` — no authentication or roles required
 - ``@authz_authenticated`` — IIS authentication required, no role check
@@ -11,6 +11,11 @@ Role resolution happens only for role-protected views:
 
 - Dev mode (``AUTH_MODE=dev``): reads ``DEV_USER_ROLE`` from environment
 - IIS mode (``AUTH_MODE=iis``): queries LDAP for AD group membership (per-request)
+
+This middleware is responsible only for authentication and role checks implied
+by the resolved authorization policy. Presence of the required decorator
+families is enforced earlier in the middleware stack by
+``DecoratorEnforcementMiddleware``.
 """
 
 from __future__ import annotations
@@ -35,9 +40,9 @@ logger = logging.getLogger(__name__)
 class AuthorizationMiddleware:
     """Enforces per-view authorization policies set by decorators.
 
-    Strict mode: all routed views must live under ``api.views`` and declare
-    an explicit authorization policy. Views without a policy raise
-    ``ImproperlyConfigured`` at request time.
+    Reads the ``authz_policy`` attribute from the resolved view and applies
+    the corresponding authentication and role checks.  Views without a
+    policy raise ``ImproperlyConfigured`` at request time.
     """
 
     def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
@@ -68,8 +73,8 @@ class AuthorizationMiddleware:
     ) -> HttpResponse | None:
         """Run authorization checks once the target view is known.
 
-        Strict mode is enabled: only views under ``api.views`` are allowed and
-        every such view must explicitly declare one auth policy decorator.
+        Reads the ``authz_policy`` attribute and applies the corresponding
+        authentication and role-resolution logic.
 
         Args:
             request: The HTTP request object.
@@ -78,13 +83,6 @@ class AuthorizationMiddleware:
             view_kwargs: Keyword args for the view callable.
         """
         del view_args, view_kwargs
-
-        if not self._is_project_view(view_func):
-            raise ImproperlyConfigured(
-                "All routed views must live under api.views and declare an "
-                "authorization policy decorator. Route third-party endpoints "
-                "through wrapper views in api.views."
-            )
 
         try:
             policy = self._get_view_attr(view_func, AUTHZ_POLICY_ATTR, str)
@@ -125,7 +123,9 @@ class AuthorizationMiddleware:
 
             raise ImproperlyConfigured(f"Unknown authz policy '{policy}'.")
         except AuthenticationFailed as exc:
-            logger.warning("authentication failed: %s %s — %s", request.method, request.path, exc)
+            logger.warning(
+                "authentication failed: %s %s — %s", request.method, request.path, exc
+            )
             return JsonResponse(
                 {
                     "detail": "Authentication credentials were not provided.",
@@ -135,7 +135,13 @@ class AuthorizationMiddleware:
             )
         except PermissionDenied as exc:
             username = getattr(request.user, "username", None) or "anonymous"
-            logger.warning("permission denied: %s %s %s — %s", username, request.method, request.path, exc)
+            logger.warning(
+                "permission denied: %s %s %s — %s",
+                username,
+                request.method,
+                request.path,
+                exc,
+            )
             return JsonResponse(
                 {
                     "detail": "You do not have permission to perform this action.",
@@ -143,19 +149,6 @@ class AuthorizationMiddleware:
                 },
                 status=403,
             )
-
-    def _is_project_view(self, view_func: Any | None) -> bool:
-        """Return True when the resolved view belongs to api.views."""
-        if view_func is None:
-            return False
-
-        module_name = getattr(view_func, "__module__", "")
-        if isinstance(module_name, str) and module_name.startswith("api.views"):
-            return True
-
-        view_class = getattr(view_func, "view_class", None)
-        class_module = getattr(view_class, "__module__", "")
-        return isinstance(class_module, str) and class_module.startswith("api.views")
 
     def _get_view_attr(self, view_func: Any, attr: str, expected_type: type) -> Any:
         """Read a decorator attribute from a view function or its view_class."""
