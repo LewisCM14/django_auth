@@ -1002,17 +1002,16 @@ The `detail` and `request_id` fields match the standard error envelope. The `Ret
     - `pytest.ini` sets `testpaths = tests` so discovery is explicit and scoped.
 
 1. Authentication & Authorization Testing
-    - Backend endpoints correctly read user identity from IIS-provided environment variables or headers (e.g., REMOTE_USER).
+    - Backend endpoints correctly read user identity from IIS-provided environment variables or headers (e.g., `REMOTE_USER`).
     - Backend queries Active Directory via LDAP for group membership and maps to application roles.
-    - Group/role mapping from Active Directory is respected for admin-only endpoints.
-    - Requests without valid IIS authentication are rejected.
+    - Group/role mapping from Active Directory is respected for admin-only and viewer-only endpoints.
+    - Requests without valid IIS authentication are rejected with `401`.
 
-    **Testing IIS/LDAP/AD Authentication and Authorization**
-    - IIS authentication is simulated in tests by setting the `REMOTE_USER` header or environment variable in the Django test client.
-    - LDAP/AD group membership is mocked by patching the LDAP backend to return the desired group memberships for test users.
-    - Pytest fixtures are provided for both `app_admin` and `app_viewer` roles, allowing tests to easily exercise both permission levels on protected routes.
-    - These fixtures should be placed in `tests/conftest.py` and used in any test file that needs to verify group-based authorization logic.
-    - This approach allows full coverage of authentication and authorization logic without requiring a real IIS or AD server.
+    **Testing approach:**
+    - Simulate IIS authentication in tests by setting the `REMOTE_USER` header in the Django test client.
+    - Mock LDAP/AD group membership by patching the LDAP backend to return desired group memberships for test users.
+    - Use pytest fixtures in `tests/conftest.py` to provide pre-configured clients for `app_admin` and `app_viewer` roles.
+    - This approach provides full coverage without requiring a real IIS, AD, or LDAP server.
 
 ### Local Development
 
