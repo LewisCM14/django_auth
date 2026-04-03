@@ -328,6 +328,7 @@ backend/
 | `api/adapters/`                     | Source Adapter       | External data-source access with resilience patterns |
 | `api/migrations/`                   | Persistence          | Django migration history |
 | `config/`                           | Cross-cutting        | Django and app configuration (settings, WSGI, logging, etc.) |
+| `config/logging.py`                 | Cross-cutting        | `JsonFormatter` — custom `logging.Formatter` subclass for structured JSON output |
 | `tests/`                            | Cross-cutting        | All automated tests (unit, integration, contract); mirrors backend structure |
 
 ### Endpoints
@@ -450,7 +451,7 @@ Logging is configured via Django's `LOGGING` dict in `config/settings.py`, using
 | `api` logger level | `DEBUG` | `INFO` |
 | `django` logger level | `INFO` | `WARNING` |
 
-The JSON formatter is a lightweight custom `logging.Formatter` subclass in `config/settings.py` (no external dependencies). It reads `request_id` from the log record's extras, defaulting to `"-"` when no request context is available (e.g., startup, management commands).
+The JSON formatter is a lightweight custom `logging.Formatter` subclass in `config/logging.py` (no external dependencies). It reads `request_id` from the log record's extras, defaulting to `"-"` when no request context is available (e.g., startup, management commands). Keeping it separate from `settings.py` allows it to be instantiated and tested in isolation without triggering settings validation.
 
 #### Request-ID Threading
 
@@ -566,7 +567,7 @@ No per-view `try/except` blocks are needed. The handler is the single funnel for
 
 #### Design Principles
 
-1. **Environment-aware backend** — Development and test environments use Django's `LocMemCache` (zero infrastructure). Production uses `django-redis` with a Redis instance, providing shared cache across IIS worker processes and persistence across application restarts.
+1. **Environment-aware backend** — Development and test environments use Django's `LocMemCache` (zero infrastructure). Production can run with `LocMemCache` initially (no Redis dependency) and can switch to `django-redis` when a Redis service is available. Redis is the recommended production target for shared cache across IIS worker processes and persistence across application restarts.
 2. **LDAP group membership is not cached** — AD group changes (additions, removals, disablements) must take immediate effect for security. Every `@authz_roles` request queries LDAP directly. The additional latency is acceptable for this use case. Caching is reserved for application data (adapter responses, service-layer results) where eventual consistency is appropriate.
 3. **HTTP cache headers** — Views can declare caching intent via Django's `@cache_control` decorator or `Cache-Control` header manipulation.
 4. **Cache key conventions** — A documented naming convention prevents key collisions as the application grows.
@@ -585,6 +586,12 @@ Redis configuration:
 CACHE_BACKEND=redis
 REDIS_URL=redis://localhost:6379/0
 ```
+
+If Redis is not available in a given production environment, keep:
+```
+CACHE_BACKEND=locmem
+```
+This is supported, but cache entries are process-local and not shared across IIS workers.
 
 `django-redis` is available on `conda-forge` and is BSD-licensed (corporate-safe). No additional dependencies beyond Redis itself (typically already available in enterprise environments or trivially installable).
 
@@ -754,6 +761,12 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     LDAP_SERVER_URI=ldap://dc.corp.local
     LDAP_BASE_DN=DC=corp,DC=local
     LOG_FORMAT=json
+    CACHE_BACKEND=locmem
+    ```
+
+    Optional (recommended when Redis is available):
+
+    ```
     CACHE_BACKEND=redis
     REDIS_URL=redis://localhost:6379/0
     ```

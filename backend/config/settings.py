@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -120,6 +120,7 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "EXCEPTION_HANDLER": "api.exceptions.api_exception_handler",
     # Authentication and authorization are handled entirely by middleware
     # (api.middleware.authentication and api.middleware.authorization).
     # DRF's own auth/permission system is deliberately disabled so that
@@ -145,11 +146,76 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "0.1.0",
 }
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "django-auth-cache",
+CACHE_BACKEND: str = os.getenv("CACHE_BACKEND", "locmem").strip().lower()
+REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+
+if CACHE_BACKEND == "redis":
+    if not REDIS_URL:
+        raise ImproperlyConfigured(
+            "REDIS_URL is required when CACHE_BACKEND=redis."
+        )
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            },
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "django-auth-cache",
+        }
+    }
 
 CSRF_TRUSTED_ORIGINS: list[str] = []
+
+LOG_FORMAT: str = os.getenv("LOG_FORMAT", "text").strip().lower()
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG" if AUTH_MODE == "dev" else "WARNING").strip().upper()
+
+
+LOGGING: dict[str, Any] = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "request_id": {
+            "()": "api.middleware.request_id.RequestIdFilter",
+        },
+    },
+    "formatters": {
+        "json": {
+            "()": "config.logging.JsonFormatter",
+        },
+        "text": {
+            "format": "[{levelname}] {request_id} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stderr",
+            "filters": ["request_id"],
+            "formatter": "json" if LOG_FORMAT == "json" else "text",
+        },
+    },
+    "loggers": {
+        "api": {
+            "level": "DEBUG" if AUTH_MODE == "dev" else "INFO",
+            "handlers": ["console"],
+            "propagate": False,
+        },
+        "django": {
+            "level": "INFO" if AUTH_MODE == "dev" else "WARNING",
+            "handlers": ["console"],
+            "propagate": False,
+        },
+    },
+    "root": {
+        "level": LOG_LEVEL,
+        "handlers": ["console"],
+    },
+}

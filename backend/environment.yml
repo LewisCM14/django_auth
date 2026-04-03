@@ -10,6 +10,7 @@ dependencies:
   - django-cors-headers
   - ldap3>=2.9
   - python-dotenv
+  - django-redis
   - pytest
   - pytest-django
   - pytest-mock

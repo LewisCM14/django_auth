@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
+from unittest.mock import Mock
 
 import pytest
-from django.test import Client
+from django.http import HttpResponse
+from django.test import Client, RequestFactory
+
+from api.middleware.request_id import RequestIdFilter, RequestIdMiddleware, request_id_var
 
 
 class TestRequestIdMiddleware:
@@ -73,3 +78,178 @@ class TestRequestIdMiddleware:
         # Request ID should be non-empty and valid UUID
         assert request_id_from_header
         uuid.UUID(request_id_from_header, version=4)
+
+    def test_request_id_var_set_during_request(self) -> None:
+        """request_id_var holds the request UUID between process_request and process_response.
+
+        After process_request runs, the context variable must contain the same
+        UUID that was stored on the request object — before process_response
+        resets it.
+        """
+        request_id_var.set("-")  # ensure a clean starting state
+        factory = RequestFactory()
+        request = factory.get("/api/health/")
+        middleware = RequestIdMiddleware(get_response=lambda r: HttpResponse())
+
+        middleware.process_request(request)
+
+        current_var = request_id_var.get()
+        assert current_var != "-"
+        assert current_var == getattr(request, "request_id")
+        request_id_var.set("-")  # clean up so subsequent tests start fresh
+
+    def test_request_id_var_reset_after_response(self) -> None:
+        """request_id_var returns '-' after process_response completes.
+
+        The middleware must reset the context variable to the default sentinel
+        at the end of each request so that code running outside a request
+        context (background tasks, management commands) never sees a stale ID.
+        """
+        factory = RequestFactory()
+        request = factory.get("/api/health/")
+        response = HttpResponse()
+        middleware = RequestIdMiddleware(get_response=lambda r: HttpResponse())
+
+        middleware.process_request(request)
+        middleware.process_response(request, response)
+
+        assert request_id_var.get() == "-"
+
+
+class TestRequestIdFilter:
+    """Tests for the RequestIdFilter logging filter."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self) -> None:
+        """Reset request_id_var to the default before each test."""
+        request_id_var.set("-")
+
+    def test_request_id_filter_injects_request_id(self) -> None:
+        """Filter injects the value from request_id_var into the log record.
+
+        When request_id_var holds a correlation ID, the filter must set
+        record.request_id to that value so the log formatter can include it.
+        """
+        request_id_var.set("test-correlation-id")
+        f = RequestIdFilter()
+        record = logging.LogRecord(
+            name="test", level=logging.INFO, pathname="", lineno=0,
+            msg="test message", args=(), exc_info=None,
+        )
+        f.filter(record)
+
+        assert getattr(record, "request_id") == "test-correlation-id"
+
+    def test_request_id_filter_uses_default_when_no_context(self) -> None:
+        """Filter injects '-' when no request is in flight.
+
+        Outside a request (startup, management commands, background tasks),
+        request_id_var holds the default '-'. The filter must propagate this
+        so log records always have a well-defined request_id field.
+        """
+        # request_id_var already reset to "-" by the setup fixture
+        f = RequestIdFilter()
+        record = logging.LogRecord(
+            name="test", level=logging.INFO, pathname="", lineno=0,
+            msg="test message", args=(), exc_info=None,
+        )
+        f.filter(record)
+
+        assert getattr(record, "request_id") == "-"
+
+
+class TestRequestIdMiddlewareAccessLogging:
+    """Tests for the per-request access log emitted by RequestIdMiddleware."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Use IIS mode and re-enable log propagation so caplog can capture records.
+
+        The LOGGING config sets propagate=False on the 'api' logger to prevent
+        log noise bleeding into Django's own handlers. Tests that need to capture
+        log output via caplog must temporarily restore propagation so records
+        reach the root logger where pytest's capture handler lives.
+        """
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
+        self.factory = RequestFactory()
+
+    def test_access_log_emitted_on_response(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """process_response emits an INFO log containing method, path, and status code."""
+        middleware = RequestIdMiddleware(get_response=lambda r: HttpResponse())
+        request = self.factory.get("/api/health/")
+        middleware.process_request(request)
+        response = HttpResponse(status=200)
+
+        with caplog.at_level(logging.INFO, logger="api.middleware.request_id"):
+            middleware.process_response(request, response)
+
+        messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "api.middleware.request_id"
+        ]
+        assert any("GET" in m and "/api/health/" in m and "200" in m for m in messages)
+
+    def test_access_log_includes_duration(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Access log message includes the request duration in milliseconds."""
+        middleware = RequestIdMiddleware(get_response=lambda r: HttpResponse())
+        request = self.factory.get("/api/health/")
+        middleware.process_request(request)
+        response = HttpResponse(status=200)
+
+        with caplog.at_level(logging.INFO, logger="api.middleware.request_id"):
+            middleware.process_response(request, response)
+
+        messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "api.middleware.request_id"
+        ]
+        assert any("ms" in m for m in messages)
+
+    def test_access_log_includes_username_when_authenticated(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Access log includes the authenticated username when a user is present."""
+        middleware = RequestIdMiddleware(get_response=lambda r: HttpResponse())
+        request = self.factory.get("/api/health/")
+        user = Mock(is_authenticated=True)
+        user.get_username.return_value = "testuser"
+        request.user = user
+        middleware.process_request(request)
+        response = HttpResponse(status=200)
+
+        with caplog.at_level(logging.INFO, logger="api.middleware.request_id"):
+            middleware.process_response(request, response)
+
+        messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "api.middleware.request_id"
+        ]
+        assert any("testuser" in m for m in messages)
+
+    def test_access_log_shows_anonymous_when_unauthenticated(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Access log shows 'anonymous' when no user is attached to the request."""
+        middleware = RequestIdMiddleware(get_response=lambda r: HttpResponse())
+        request = self.factory.get("/api/health/")
+        request.user = None
+        middleware.process_request(request)
+        response = HttpResponse(status=200)
+
+        with caplog.at_level(logging.INFO, logger="api.middleware.request_id"):
+            middleware.process_response(request, response)
+
+        messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "api.middleware.request_id"
+        ]
+        assert any("anonymous" in m for m in messages)

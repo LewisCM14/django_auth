@@ -31,4 +31,6 @@ class UserView(View):
             "roles": list(getattr(user, "roles", [])),
         }
         serializer = UserSerializer(payload)
-        return JsonResponse(serializer.data)
+        response = JsonResponse(serializer.data)
+        response["Cache-Control"] = "private, no-cache"
+        return response

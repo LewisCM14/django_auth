@@ -15,6 +15,7 @@ Role resolution happens only for role-protected views:
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Callable
 
@@ -24,7 +25,10 @@ from django.utils.decorators import sync_and_async_middleware
 from rest_framework.exceptions import AuthenticationFailed
 
 from api.constants import AD_GROUP_TO_ROLE_MAP, ROLE_ADMIN, ROLE_VIEWER
+from api.middleware.request_id import request_id_var
 from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
+
+logger = logging.getLogger(__name__)
 
 
 @sync_and_async_middleware
@@ -120,14 +124,23 @@ class AuthorizationMiddleware:
                 return None
 
             raise ImproperlyConfigured(f"Unknown authz policy '{policy}'.")
-        except AuthenticationFailed:
+        except AuthenticationFailed as exc:
+            logger.warning("authentication failed: %s %s — %s", request.method, request.path, exc)
             return JsonResponse(
-                {"detail": "Authentication credentials were not provided."},
+                {
+                    "detail": "Authentication credentials were not provided.",
+                    "request_id": request_id_var.get(),
+                },
                 status=401,
             )
-        except PermissionDenied:
+        except PermissionDenied as exc:
+            username = getattr(request.user, "username", None) or "anonymous"
+            logger.warning("permission denied: %s %s %s — %s", username, request.method, request.path, exc)
             return JsonResponse(
-                {"detail": "You do not have permission to perform this action."},
+                {
+                    "detail": "You do not have permission to perform this action.",
+                    "request_id": request_id_var.get(),
+                },
                 status=403,
             )
 

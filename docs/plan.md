@@ -75,18 +75,20 @@ Write tests in `tests/api/middleware/test_request_id.py`:
 
 **Type:** Implementation
 
+Create `config/logging.py` with a `JsonFormatter(logging.Formatter)` class that emits single-line JSON: `{"timestamp", "level", "logger", "request_id", "message"}`. Keeping the class in its own module (rather than `settings.py`) allows it to be tested in isolation without triggering settings validation guards.
+
 Add to `config/settings.py`:
 
-1. A `JsonFormatter(logging.Formatter)` class that emits single-line JSON: `{"timestamp", "level", "logger", "request_id", "message"}`.
-2. A `LOGGING` dict using `dictConfig` format:
+1. A `LOGGING` dict using `dictConfig` format:
    - **Filters:** `request_id` filter using `api.middleware.request_id.RequestIdFilter`.
-   - **Formatters:** `json` (uses `JsonFormatter`), `text` (uses format string `[{levelname}] {request_id} {message}`).
+   - **Formatters:** `json` (references `config.logging.JsonFormatter` by dotted path), `text` (uses format string `[{levelname}] {request_id} {message}`).
    - **Handlers:** `console` handler (`StreamHandler` to stderr), using `json` or `text` formatter based on `LOG_FORMAT` env var (default `text`).
    - **Loggers:** `api` logger at `DEBUG` (dev) or `INFO` (prod); `django` logger at `INFO` (dev) or `WARNING` (prod).
    - **Root:** Level from `LOG_LEVEL` env var (default `DEBUG` in dev, `WARNING` in prod).
-3. Read `LOG_FORMAT` and `LOG_LEVEL` environment variables.
+2. Read `LOG_FORMAT` and `LOG_LEVEL` environment variables.
 
 **Files changed:**
+- `config/logging.py` (new file)
 - `config/settings.py`
 
 **Acceptance criteria:**
@@ -105,11 +107,12 @@ Write tests in `tests/config/test_settings.py` (add to existing file or create i
 
 1. `test_logging_config_has_request_id_filter` — Assert `LOGGING["filters"]` contains `request_id` key.
 2. `test_logging_config_console_handler_exists` — Assert `LOGGING["handlers"]["console"]` is configured.
-3. `test_json_formatter_output_shape` — Instantiate `JsonFormatter`, format a log record, parse the output as JSON, verify keys `timestamp`, `level`, `logger`, `request_id`, `message` are present.
+3. `test_json_formatter_output_shape` — Import `JsonFormatter` from `config.logging`, format a log record, parse the output as JSON, verify keys `timestamp`, `level`, `logger`, `request_id`, `message` are present.
 4. `test_json_formatter_includes_request_id_from_record` — Set `request_id` on a log record extra, format it, verify the value appears in the JSON output.
 
 **Files changed:**
 - `tests/config/test_settings.py`
+- `tests/config/test_logging.py` (new file for `JsonFormatter` tests)
 
 **Acceptance criteria:**
 - All new tests pass.
