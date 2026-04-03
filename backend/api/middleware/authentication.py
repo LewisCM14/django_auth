@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.models import User
 from django.http import HttpRequest, HttpResponse
 from django.utils.decorators import sync_and_async_middleware
@@ -26,7 +27,7 @@ class AuthenticationMiddleware:
     In IIS mode (AUTH_MODE=iis):
     - Reads the REMOTE_USER header provided by IIS
     - Creates or retrieves a Django User object via get_or_create
-    - Handles requests without REMOTE_USER by leaving user as None
+    - Attaches AnonymousUser when REMOTE_USER is not present
     """
 
     def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
@@ -61,12 +62,15 @@ class AuthenticationMiddleware:
         In IIS mode:
         - Reads REMOTE_USER from request.META (set by IIS)
         - Creates or retrieves a Django User with that username
-        - Leaves request.user as None if REMOTE_USER is not present
+        - Attaches AnonymousUser if REMOTE_USER is not present
 
         Args:
             request: The HTTP request object to authenticate.
         """
         auth_mode = os.getenv("AUTH_MODE", "iis")
+        anonymous_user = AnonymousUser()
+        request.user = anonymous_user
+        request._cached_user = anonymous_user  # type: ignore[attr-defined]  # HttpRequest gains _cached_user dynamically at runtime; Django's stubs do not declare it.
 
         if auth_mode == "dev":
             # Development mode: inject mock user
@@ -86,4 +90,3 @@ class AuthenticationMiddleware:
                 request.user = user
                 # Same rationale as above: _cached_user exists at runtime but is not typed on HttpRequest.
                 request._cached_user = user  # type: ignore[attr-defined]
-            # If no REMOTE_USER, leave request.user as None (unauthenticated)

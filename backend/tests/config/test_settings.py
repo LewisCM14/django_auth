@@ -98,12 +98,48 @@ class TestSettingsCacheConfig:
     def test_default_cache_backend_is_locmem(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """CACHES defaults to LocMemCache when CACHE_BACKEND is unset."""
+        """CACHES is configured for LocMemCache by default."""
         monkeypatch.setenv("AUTH_MODE", "dev")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
-        monkeypatch.delenv("CACHE_BACKEND", raising=False)
 
         with patch("dotenv.load_dotenv", return_value=True):
             module = _load_settings_module("test_settings_default_cache_locmem")
 
-        assert "LocMemCache" in module.CACHES["default"]["BACKEND"]
+        assert module.CACHES["default"]["BACKEND"] == (
+            "django.core.cache.backends.locmem.LocMemCache"
+        )
+
+
+class TestSettingsLdapConfig:
+    """Tests for LDAP configuration exported by settings."""
+
+    def test_missing_ldap_settings_in_iis_mode_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IIS mode requires LDAP_SERVER_URI and LDAP_BASE_DN at import time."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("LDAP_SERVER_URI", "")
+        monkeypatch.setenv("LDAP_BASE_DN", "")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(
+                ImproperlyConfigured,
+                match="LDAP_SERVER_URI and LDAP_BASE_DN are required",
+            ):
+                _load_settings_module("test_settings_missing_ldap_iis")
+
+    def test_ldap_settings_are_exported_when_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """LDAP settings are available for the future real group lookup implementation."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_ldap_configured")
+
+        assert module.LDAP_SERVER_URI == "ldap://dc.corp.local"
+        assert module.LDAP_BASE_DN == "DC=corp,DC=local"

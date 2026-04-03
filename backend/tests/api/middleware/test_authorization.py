@@ -413,11 +413,164 @@ class TestAuthorizationMiddlewareIISMode:
         assert result.status_code == 401
 
 
-def test_query_ldap_groups_placeholder_returns_empty_list() -> None:
-    """Default LDAP query placeholder returns an empty group list."""
+def test_query_ldap_groups_returns_empty_when_not_configured() -> None:
+    """LDAP query returns empty list when settings are not configured."""
     from api.middleware.authorization import query_ldap_groups
 
-    assert query_ldap_groups("DOMAIN\\someone") == []
+    with override_settings(LDAP_SERVER_URI="", LDAP_BASE_DN=""):
+        assert query_ldap_groups("DOMAIN\\someone") == []
+
+
+class TestQueryLdapGroups:
+    """Tests for the real LDAP query function."""
+
+    def test_returns_empty_when_server_uri_not_configured(self) -> None:
+        """Returns [] when LDAP_SERVER_URI is blank."""
+        from api.middleware.authorization import query_ldap_groups
+
+        with override_settings(LDAP_SERVER_URI="", LDAP_BASE_DN="DC=corp,DC=local"):
+            assert query_ldap_groups("DOMAIN\\jsmith") == []
+
+    def test_returns_empty_when_base_dn_not_configured(self) -> None:
+        """Returns [] when LDAP_BASE_DN is blank."""
+        from api.middleware.authorization import query_ldap_groups
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local", LDAP_BASE_DN=""
+        ):
+            assert query_ldap_groups("DOMAIN\\jsmith") == []
+
+    def test_raises_on_connection_failure(self) -> None:
+        """Raises when the LDAP server is unreachable."""
+        from api.middleware.authorization import query_ldap_groups
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch(
+                "api.middleware.authorization.Connection",
+                side_effect=Exception("connection refused"),
+            ):
+                with pytest.raises(Exception, match="connection refused"):
+                    query_ldap_groups("DOMAIN\\jsmith")
+
+    def test_returns_empty_when_no_entries_found(self) -> None:
+        """Returns [] when the user has no LDAP entries."""
+        from api.middleware.authorization import query_ldap_groups
+
+        mock_conn = Mock()
+        mock_conn.entries = []
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch(
+                "api.middleware.authorization.Connection", return_value=mock_conn
+            ):
+                assert query_ldap_groups("DOMAIN\\jsmith") == []
+                mock_conn.unbind.assert_called_once()
+
+    def test_returns_groups_on_successful_lookup(self) -> None:
+        """Returns group DNs from the memberOf attribute."""
+        from api.middleware.authorization import query_ldap_groups
+
+        expected_groups = [
+            "CN=app-admins,OU=Groups,DC=corp,DC=local",
+            "CN=domain-users,OU=Groups,DC=corp,DC=local",
+        ]
+        mock_entry = Mock()
+        mock_entry.memberOf.values = expected_groups
+        mock_conn = Mock()
+        mock_conn.entries = [mock_entry]
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch(
+                "api.middleware.authorization.Connection", return_value=mock_conn
+            ):
+                result = query_ldap_groups("DOMAIN\\jsmith")
+
+        assert result == expected_groups
+        mock_conn.unbind.assert_called_once()
+
+    def test_extracts_sam_account_name_from_domain_username(self) -> None:
+        """Strips DOMAIN\\ prefix when building the LDAP filter."""
+        from api.middleware.authorization import query_ldap_groups
+
+        mock_conn = Mock()
+        mock_conn.entries = []
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch(
+                "api.middleware.authorization.Connection", return_value=mock_conn
+            ):
+                query_ldap_groups("DOMAIN\\jsmith")
+
+        call_kwargs = mock_conn.search.call_args[1]
+        assert "jsmith" in call_kwargs["search_filter"]
+        assert "DOMAIN" not in call_kwargs["search_filter"]
+
+    def test_handles_username_without_domain_prefix(self) -> None:
+        """Works with a plain username (no DOMAIN\\ prefix)."""
+        from api.middleware.authorization import query_ldap_groups
+
+        mock_conn = Mock()
+        mock_conn.entries = []
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch(
+                "api.middleware.authorization.Connection", return_value=mock_conn
+            ):
+                query_ldap_groups("jsmith")
+
+        call_kwargs = mock_conn.search.call_args[1]
+        assert "jsmith" in call_kwargs["search_filter"]
+
+    def test_raises_on_search_exception(self) -> None:
+        """Raises when the search itself fails (unbind still called)."""
+        from api.middleware.authorization import query_ldap_groups
+
+        mock_conn = Mock()
+        mock_conn.search.side_effect = Exception("search timeout")
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch(
+                "api.middleware.authorization.Connection", return_value=mock_conn
+            ):
+                with pytest.raises(Exception, match="search timeout"):
+                    query_ldap_groups("DOMAIN\\jsmith")
+                mock_conn.unbind.assert_called_once()
+
+    def test_unbind_called_even_on_search_failure(self) -> None:
+        """Connection is always unbound even when the search raises."""
+        from api.middleware.authorization import query_ldap_groups
+
+        mock_conn = Mock()
+        mock_conn.search.side_effect = RuntimeError("network error")
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch(
+                "api.middleware.authorization.Connection", return_value=mock_conn
+            ):
+                with pytest.raises(RuntimeError, match="network error"):
+                    query_ldap_groups("DOMAIN\\jsmith")
+                mock_conn.unbind.assert_called_once()
 
 
 class TestAuthorizationMiddlewareHelpers:
@@ -531,6 +684,30 @@ class TestAuthorizationMiddlewareAuditLogging:
         assert "DOMAIN\\denied_user" in msg
         assert "/api/user/" in msg
 
+    @override_settings(DEBUG=False)
+    def test_500_response_logs_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Unhandled exception triggers an ERROR log with traceback."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\admin_user")
+        request.method = "GET"
+        request.path = "/api/user/"
+        view_func = _make_roles_view()
+
+        with caplog.at_level(logging.ERROR, logger="api.middleware.authorization"):
+            with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
+                mock_ldap.side_effect = RuntimeError("LDAP server crashed")
+                with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                    result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 500
+        records = [
+            r for r in caplog.records if r.name == "api.middleware.authorization"
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.ERROR
+
 
 class TestAuthorizationMiddlewareErrorResponseShape:
     """Tests that 401/403 error responses include the request_id field."""
@@ -582,3 +759,48 @@ class TestAuthorizationMiddlewareErrorResponseShape:
         assert result.status_code == 403
         body = json.loads(result.content)
         assert "request_id" in body
+
+    @override_settings(DEBUG=False)
+    def test_500_response_on_unhandled_exception(self) -> None:
+        """Unhandled exception returns 500 JSON envelope with request_id."""
+        import json
+
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\admin_user")
+        request.method = "GET"
+        request.path = "/api/user/"
+        view_func = _make_roles_view()
+
+        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
+            mock_ldap.side_effect = RuntimeError("LDAP server crashed")
+            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 500
+        body = json.loads(result.content)
+        assert body["detail"] == "An unexpected error occurred."
+        assert "request_id" in body
+
+    @override_settings(DEBUG=False)
+    def test_500_response_does_not_leak_internal_details(self) -> None:
+        """500 response body contains only the safe message, not the traceback."""
+        import json
+
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\admin_user")
+        request.method = "GET"
+        request.path = "/api/user/"
+        view_func = _make_roles_view()
+
+        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
+            mock_ldap.side_effect = ConnectionError("secret internal detail")
+            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 500
+        body = json.loads(result.content)
+        assert "secret internal detail" not in json.dumps(body)

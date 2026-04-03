@@ -29,6 +29,10 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils.decorators import sync_and_async_middleware
 from rest_framework.exceptions import AuthenticationFailed
 
+from django.conf import settings
+from ldap3 import Connection, Server, SUBTREE
+from ldap3.utils.conv import escape_filter_chars
+
 from api.constants import AD_GROUP_TO_ROLE_MAP, ROLE_ADMIN, ROLE_VIEWER
 from api.middleware.request_id import request_id_var
 from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
@@ -149,6 +153,19 @@ class AuthorizationMiddleware:
                 },
                 status=403,
             )
+        except ImproperlyConfigured:
+            raise
+        except Exception:
+            logger.exception(
+                "Unhandled exception (request_id=%s)", request_id_var.get()
+            )
+            return JsonResponse(
+                {
+                    "detail": "An unexpected error occurred.",
+                    "request_id": request_id_var.get(),
+                },
+                status=500,
+            )
 
     def _get_view_attr(self, view_func: Any, attr: str, expected_type: type) -> Any:
         """Read a decorator attribute from a view function or its view_class."""
@@ -201,9 +218,12 @@ class AuthorizationMiddleware:
 def query_ldap_groups(username: str) -> list[str]:
     """Query LDAP for user's group memberships.
 
-    In a real implementation, this would connect to Active Directory via LDAP
-    and retrieve the list of groups the user belongs to. For now, this is a
-    placeholder that returns an empty list (tests mock this function).
+    Connects to Active Directory via LDAP using ``LDAP_SERVER_URI`` and
+    ``LDAP_BASE_DN`` from Django settings, searches for the user's
+    ``memberOf`` attribute, and returns the list of group DNs.
+
+    Connection or query failures are logged and result in an empty list,
+    which causes downstream role checks to deny access (safe default).
 
     Args:
         username: The username to query (typically DOMAIN\\username).
@@ -211,4 +231,29 @@ def query_ldap_groups(username: str) -> list[str]:
     Returns:
         List of LDAP group DNs the user belongs to.
     """
-    return []
+    if not settings.LDAP_SERVER_URI or not settings.LDAP_BASE_DN:
+        logger.warning(
+            "LDAP_SERVER_URI or LDAP_BASE_DN not configured; skipping lookup"
+        )
+        return []
+
+    sam_account_name = username.split("\\")[-1] if "\\" in username else username
+
+    server = Server(settings.LDAP_SERVER_URI, use_ssl=True)
+    conn = Connection(server, auto_bind=True)
+
+    try:
+        conn.search(
+            search_base=settings.LDAP_BASE_DN,
+            search_filter=f"(sAMAccountName={escape_filter_chars(sam_account_name)})",
+            search_scope=SUBTREE,
+            attributes=["memberOf"],
+        )
+
+        if not conn.entries:
+            logger.warning("LDAP lookup returned no entries for %s", username)
+            return []
+
+        return list(conn.entries[0].memberOf.values)
+    finally:
+        conn.unbind()

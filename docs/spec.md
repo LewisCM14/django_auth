@@ -183,7 +183,7 @@ ruff >= 0.15.9`"]
 
 1. API Layer (`Django REST Framework (DRF)`)
     - Exposes stable endpoints.
-    - Leverages Django's built-in `RemoteUserMiddleware` and `RemoteUserBackend` to authenticate the IIS-provided `REMOTE_USER`.
+    - Relies on the custom `api.middleware.authentication.AuthenticationMiddleware` to resolve the IIS-provided `REMOTE_USER` into a Django `User`, or attach `AnonymousUser` when no identity is present.
     - Uses `ldap3` library to query Active Directory for group membership on every `@authz_roles` request. Results are not cached — AD changes take immediate effect.
     - Maps AD group membership to Django user roles for authorization (e.g., admin access).
     - Every view must explicitly apply all three decorator families: authorization (`@authz_*`), rate limiting (`@throttle` / `@throttle_exempt`), and cache policy (`@cache_*`). This is enforced by middleware, and missing decorators raise `ImproperlyConfigured`.
@@ -409,7 +409,7 @@ backend/
 | `api/models.py`                     | Persistence          | ORM models |
 | `api/middleware/`                   | API/Cross-cutting    | Middleware package (see below) |
 | `api/middleware/request_id.py`      | Cross-cutting        | Request-ID injection middleware |
-| `api/middleware/authentication.py`  | API                  | `RemoteUserMiddleware` integration and dev-mode identity injection |
+| `api/middleware/authentication.py`  | API                  | Resolves `REMOTE_USER` into a Django `User` in IIS mode and injects a mock identity in dev mode; attaches `AnonymousUser` when unauthenticated |
 | `api/middleware/enforcement.py`    | API/Cross-cutting    | Decorator enforcement — ensures every view declares `@throttle`/`@cache_*`/`@authz_*` decorators |
 | `api/middleware/authorization.py`   | API                  | LDAP group membership lookup, role mapping, and access control |
 | `api/urls.py`                       | API                  | URL routing to views package |
@@ -1072,9 +1072,8 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `DEBUG`                  | No       | `True`, `False`          | `False`     | Django debug mode. Must be `False` in production. |
 | `DEV_USER_IDENTITY`      | dev only | Any string               | `dev_admin` | Mock username injected in dev mode. |
 | `DEV_USER_ROLE`          | dev only | `admin`, `viewer`        | `admin`     | Role assigned to the mock user in dev mode. |
-| `LDAP_SERVER_URI`        | iis only | LDAP URI                 | —           | Active Directory LDAP server URI (e.g., `ldap://dc.corp.local`). |
-| `LDAP_BASE_DN`           | iis only | Distinguished name       | —           | Base DN for LDAP group searches. |
-| `CACHE_BACKEND`          | No       | `locmem`                 | `locmem`    | Cache backend for this application (process-local cache). |
+| `LDAP_SERVER_URI`        | iis only | LDAP URI                 | —           | LDAP server URI reserved for the real Active Directory group lookup implementation. |
+| `LDAP_BASE_DN`           | iis only | Distinguished name       | —           | Base DN reserved for the real Active Directory group membership search. |
 | `LOG_LEVEL`              | No       | Python log level name    | `WARNING`   | Root logger level. Overrides the default for production tuning. |
 | `LOG_FORMAT`             | No       | `json`, `text`           | `text`      | Log output format. Use `json` in production for structured, machine-parseable output. |
 | `ALLOWED_HOSTS`          | Yes      | Comma-separated hosts    | —           | Django `ALLOWED_HOSTS` setting. |
@@ -1109,7 +1108,6 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     LDAP_SERVER_URI=ldap://dc.corp.local
     LDAP_BASE_DN=DC=corp,DC=local
     LOG_FORMAT=json
-    CACHE_BACKEND=locmem
     ```
 
     Optionally set `CORS_ALLOWED_ORIGINS` if the frontend is served from a different origin.
@@ -1214,7 +1212,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
 1. **Configure LDAP Connectivity**
 
-    Ensure the server can reach the Active Directory LDAP endpoint specified in `LDAP_SERVER_URI`. The application pool identity (or the authenticated user, depending on LDAP bind configuration) must have read access to query group memberships under `LDAP_BASE_DN`.
+    Ensure the server can reach the Active Directory LDAP endpoint specified in `LDAP_SERVER_URI` and that the application pool identity (or the authenticated user, depending on bind strategy) has read access to query group memberships beneath `LDAP_BASE_DN`.
 
     **Sanity check:** From the server, run:
     ```powershell
