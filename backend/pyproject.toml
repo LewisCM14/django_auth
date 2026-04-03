@@ -10,7 +10,6 @@ dependencies = [
     "django-cors-headers>=0.0.0",
     "ldap3>=2.9",
     "python-dotenv>=0.0.0",
-    "django-redis>=0.0.0",
 ]
 
 [dependency-groups]

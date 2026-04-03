@@ -25,7 +25,9 @@ from api.middleware.request_id import request_id_var
 logger = logging.getLogger(__name__)
 
 
-def api_exception_handler(exc: Exception, context: dict[str, Any]) -> Response | JsonResponse:
+def api_exception_handler(
+    exc: Exception, context: dict[str, Any]
+) -> Response | JsonResponse:
     """Handle all exceptions raised within DRF views.
 
     Args:
@@ -36,9 +38,7 @@ def api_exception_handler(exc: Exception, context: dict[str, Any]) -> Response |
         A ``Response`` or ``JsonResponse`` with ``detail`` and ``request_id``.
     """
     request: Request | None = context.get("request")
-    request_id = (
-        getattr(request, "request_id", None) or request_id_var.get()
-    )
+    request_id = getattr(request, "request_id", None) or request_id_var.get()
 
     response = exception_handler(exc, context)
 

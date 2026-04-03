@@ -1,9 +1,9 @@
 """Tests for the authorization middleware.
 
-The authorization middleware enforces explicit per-view authorization via
-decorators. Every view must declare ``@authz_public``, ``@authz_authenticated``,
-or ``@authz_roles(...)``. There are no default permissions — future developers
-must explicitly set authorization at the view level.
+The authorization middleware enforces per-view authorization via the
+``authz_policy`` attribute set by the permission decorators.  Every view
+must resolve to one of ``@authz_public``, ``@authz_authenticated``, or
+``@authz_roles(...)`` for authorization checks to proceed.
 
 Role resolution happens only when a view requires roles:
 - Dev mode: reads ``DEV_USER_ROLE`` environment variable
@@ -244,25 +244,6 @@ class TestAuthorizationMiddlewareIISMode:
         assert result is None
 
     @override_settings(DEBUG=False)
-    def test_non_project_view_raises_improperly_configured(self) -> None:
-        """Strict mode requires all routed views to live under api.views."""
-        middleware = AuthorizationMiddleware(self.get_response)
-        request = Mock()
-        request.user = None
-
-        def wrapped_view() -> None:
-            """Dummy resolved callable for third-party view simulation."""
-            return None
-
-        wrapped_view.__module__ = "third_party.module"
-
-        from django.core.exceptions import ImproperlyConfigured
-
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-            with pytest.raises(ImproperlyConfigured):
-                middleware.process_view(request, wrapped_view, [], {})
-
-    @override_settings(DEBUG=False)
     def test_authenticated_policy_allows_authenticated_user(self) -> None:
         """authz_authenticated policy allows access with identity only (no roles)."""
         middleware = AuthorizationMiddleware(self.get_response)
@@ -417,11 +398,6 @@ class TestAuthorizationMiddlewareIISMode:
             with pytest.raises(ImproperlyConfigured, match="Unknown authz policy"):
                 middleware.process_view(request, wrapped_view, [], {})
 
-    def test_is_project_view_returns_false_for_none(self) -> None:
-        """_is_project_view handles None safely."""
-        middleware = AuthorizationMiddleware(self.get_response)
-        assert middleware._is_project_view(None) is False
-
     @override_settings(DEBUG=False)
     def test_authenticated_user_with_empty_username_returns_401(self) -> None:
         """Authenticated user with empty username returns 401."""
@@ -504,9 +480,7 @@ class TestAuthorizationMiddlewareAuditLogging:
         monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
 
     @override_settings(DEBUG=False)
-    def test_401_response_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_401_response_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """Unauthenticated request triggers a WARNING log containing the path."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()

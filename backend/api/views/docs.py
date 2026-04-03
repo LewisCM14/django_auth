@@ -9,7 +9,9 @@ import drf_spectacular.openapi as spectacular_openapi
 import drf_spectacular.plumbing as spectacular_plumbing
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from api.caching import cache_private
 from api.permissions import authz_authenticated
+from api.throttling import throttle
 
 
 def _is_higher_order_type_hint_compat(hint: object) -> bool:
@@ -35,6 +37,8 @@ spectacular_plumbing.is_higher_order_type_hint = _is_higher_order_type_hint_comp
 spectacular_openapi.is_higher_order_type_hint = _is_higher_order_type_hint_compat
 
 
+@throttle("10/minute")
+@cache_private
 @authz_authenticated
 class SchemaView(SpectacularAPIView):
     """OpenAPI schema endpoint wrapper.
@@ -43,6 +47,8 @@ class SchemaView(SpectacularAPIView):
     """
 
 
+@throttle("30/minute")
+@cache_private
 @authz_authenticated
 class SwaggerDocsView(SpectacularSwaggerView):
     """Swagger UI docs endpoint wrapper.

@@ -10,11 +10,15 @@ from typing import Any
 from django.http import HttpRequest, JsonResponse
 from django.views import View
 
+from api.caching import cache_private
 from api.constants import ROLE_ADMIN, ROLE_VIEWER
 from api.permissions import authz_roles
 from api.serializers import UserSerializer
+from api.throttling import throttle
 
 
+@throttle("30/minute")
+@cache_private
 @authz_roles(ROLE_ADMIN, ROLE_VIEWER)
 class UserView(View):
     """Return the authenticated user's identity and application roles.
@@ -31,6 +35,4 @@ class UserView(View):
             "roles": list(getattr(user, "roles", [])),
         }
         serializer = UserSerializer(payload)
-        response = JsonResponse(serializer.data)
-        response["Cache-Control"] = "private, no-cache"
-        return response
+        return JsonResponse(serializer.data)

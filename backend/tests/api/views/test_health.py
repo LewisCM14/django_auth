@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from django.core.cache import cache
 from django.test import Client
+
+from api.views.health import HealthView
 
 
 class TestHealthView:
@@ -53,3 +56,32 @@ class TestHealthView:
         """DELETE /api/health/ returns HTTP 405 Method Not Allowed."""
         response = self.client.delete("/api/health/")
         assert response.status_code == 405
+
+    def test_health_returns_429_when_throttled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Second rapid request returns 429 with standard error envelope."""
+        cache.clear()
+        monkeypatch.setattr(HealthView, "_throttle_rate", "1/minute")
+
+        first = self.client.get("/api/health/")
+        second = self.client.get("/api/health/")
+
+        assert first.status_code == 200
+        assert second.status_code == 429
+        payload = second.json()
+        assert "throttled" in payload["detail"].lower()
+        assert "request_id" in payload
+
+    def test_health_throttle_includes_retry_after(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """429 response includes a Retry-After header."""
+        cache.clear()
+        monkeypatch.setattr(HealthView, "_throttle_rate", "1/minute")
+
+        self.client.get("/api/health/")
+        response = self.client.get("/api/health/")
+
+        assert response.status_code == 429
+        assert response["Retry-After"].isdigit()
