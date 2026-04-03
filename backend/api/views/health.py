@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_control
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -21,6 +23,7 @@ class HealthView(APIView):
     load balancers, uptime monitors, and health checks.
     """
 
+    @method_decorator(cache_control(public=True, max_age=5))
     def get(self, request: Any) -> Response:
         """Return health status.
 

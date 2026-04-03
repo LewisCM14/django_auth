@@ -12,14 +12,14 @@ Code is delivered one implementation plan step at a time. Each step corresponds 
 - The human reviewer reads the diff, runs the acceptance criteria, and gives explicit approval before the next step begins.
 - If changes are needed, the reviewer provides feedback and the step is revised before moving on.
 
-### 2. TDD Cycle
+### 2. Implementation & Verification Cycle
 
-Every feature follows the Red → Green cycle:
+Every feature is delivered in two consecutive steps:
 
-1. **Red** — Write failing tests that define the expected behaviour. Run `pytest` to confirm they fail.
-2. **Green** — Write the minimum implementation to make the tests pass. Run `pytest` to confirm they pass.
+1. **Implementation** — Write the minimum production code for the feature. Run `pytest` to confirm existing tests still pass. `mypy` and `ruff` must be clean. New code may have uncovered lines at this stage.
+2. **Verification** — Write tests that verify the expected behaviour and achieve 100% coverage. Run `pytest` to confirm all tests pass with full coverage.
 
-Test steps and implementation steps are separate entries in the plan. This ensures the reviewer can verify test quality independently of the implementation.
+Implementation steps and test steps are separate entries in the plan. This ensures the reviewer can verify production code quality independently before assessing test coverage.
 
 ### 3. Review Checkpoints
 
@@ -27,10 +27,11 @@ At the end of each step, before approval, the reviewer should verify:
 
 | Check               | Command                                              | Expected                  |
 |----------------------|------------------------------------------------------|---------------------------|
-| Tests pass           | `pytest`                                             | All green                 |
-| Coverage             | `pytest --cov=api --cov=config --cov-report=term-missing` | No regressions     |
-| Type checking        | `mypy api config`                                    | 0 errors                  |
-| Django system check  | `python manage.py check`                             | 0 issues                  |
+| Tests pass           | `uv run pytest`                                      | All green                 |
+| Coverage             | `uv run pytest` (coverage in `pytest.ini` addopts)   | 100%, no regressions      |
+| Type checking        | `uv run mypy api config`                             | 0 errors                  |
+| Linting              | `uv run ruff check .`                                | All checks passed         |
+| Django system check  | `uv run python manage.py check`                      | 0 issues                  |
 
 If any check fails, the step is not approved until it is resolved.
 
@@ -98,6 +99,27 @@ Use **Google-style docstrings** for consistency (one-liner for simple functions,
 - Tests are grouped in classes named after the subject under test (e.g., `TestHealthView`).
 - Shared fixtures live in `tests/conftest.py`.
 - Target: 100% line coverage across `api/` and `config/`.
+- Use `@pytest.mark.django_db` only on methods that touch the database, not at class level.
+- Tests that can run without the database should force IIS mode via `monkeypatch.setenv("AUTH_MODE", "iis")` to avoid the dev-mode startup guard.
+
+### Logging
+
+- Use Python's standard `logging` module: `logger = logging.getLogger(__name__)`.
+- Do **not** configure handlers or formatters in application code — `config/settings.py` owns all logging configuration via the `LOGGING` dict.
+- Request-ID correlation is automatic via the `RequestIdFilter`. No manual passing of request IDs to log calls is required.
+- Log levels:
+    - `DEBUG` — Detailed diagnostic information (never in production).
+    - `INFO` — Normal operational events (request served, cache hit, adapter call completed).
+    - `WARNING` — Unexpected but recoverable situations (access denied, cache miss on expected key, retry attempt).
+    - `ERROR` — Failures that need investigation (unhandled exceptions, adapter failures, database errors).
+- Never log sensitive data: request bodies, passwords, tokens, or PII beyond the corporate username.
+
+### Error Handling
+
+- Do **not** add `try/except` blocks in views to catch and format errors. The custom DRF exception handler (`api/exceptions.py`) catches all exceptions raised within views and returns a consistent error envelope.
+- For business rule violations in the service layer, raise DRF's `ValidationError` or `PermissionDenied`. The exception handler will format them.
+- For adapter-specific errors that should surface a non-500 status code, define a custom `APIException` subclass with the appropriate `status_code` and `default_detail`.
+- Unhandled exceptions automatically become 500 responses with no internal details leaked. The traceback is logged server-side.
 
 ### File Placement
 
@@ -111,7 +133,7 @@ Use **Google-style docstrings** for consistency (one-liner for simple functions,
 ### What the LLM should do
 
 - Follow the plan step sequence exactly.
-- Write tests before implementation (when the plan says so).
+- Write tests after implementation (when the plan pairs an implementation step with a verification step).
 - Include only files and changes required by the current step.
 - Use the existing code style, naming, and conventions already established in the project.
 - Run the acceptance criteria commands and report the output.

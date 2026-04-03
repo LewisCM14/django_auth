@@ -56,3 +56,73 @@ def test_allowed_hosts_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> N
         module = _load_settings_module("test_settings_allowed_hosts_default")
 
     assert module.ALLOWED_HOSTS == ["localhost", "127.0.0.1"]
+
+
+def test_logging_config_has_request_id_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LOGGING dict exposes the request_id filter for handler attachment."""
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+
+    with patch("dotenv.load_dotenv", return_value=True):
+        module = _load_settings_module("test_settings_logging_filter")
+
+    assert "request_id" in module.LOGGING["filters"]
+
+
+def test_logging_config_console_handler_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LOGGING dict includes a console handler wired to stderr."""
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+
+    with patch("dotenv.load_dotenv", return_value=True):
+        module = _load_settings_module("test_settings_logging_console")
+
+    handler = module.LOGGING["handlers"]["console"]
+    assert handler["class"] == "logging.StreamHandler"
+    assert handler["stream"] == "ext://sys.stderr"
+    assert "request_id" in handler["filters"]
+
+
+def test_default_cache_backend_is_locmem(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CACHES defaults to LocMemCache when CACHE_BACKEND is unset."""
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.delenv("CACHE_BACKEND", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    with patch("dotenv.load_dotenv", return_value=True):
+        module = _load_settings_module("test_settings_default_cache_locmem")
+
+    assert "LocMemCache" in module.CACHES["default"]["BACKEND"]
+
+
+def test_redis_cache_backend_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CACHES uses django-redis backend when CACHE_BACKEND=redis."""
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.setenv("CACHE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+
+    with patch("dotenv.load_dotenv", return_value=True):
+        module = _load_settings_module("test_settings_redis_cache")
+
+    cache_config = module.CACHES["default"]
+    assert cache_config["BACKEND"] == "django_redis.cache.RedisCache"
+    assert cache_config["LOCATION"] == "redis://localhost:6379/0"
+
+
+def test_redis_backend_without_url_raises_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Importing settings fails when redis backend is selected without REDIS_URL."""
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.setenv("CACHE_BACKEND", "redis")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    with patch("dotenv.load_dotenv", return_value=True):
+        with pytest.raises(
+            ImproperlyConfigured,
+            match="REDIS_URL is required when CACHE_BACKEND=redis",
+        ):
+            _load_settings_module("test_settings_redis_missing_url")

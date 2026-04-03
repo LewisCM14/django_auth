@@ -10,23 +10,25 @@ Every view under ``api.views`` must declare one of:
 Role resolution happens only for role-protected views:
 
 - Dev mode (``AUTH_MODE=dev``): reads ``DEV_USER_ROLE`` from environment
-- IIS mode (``AUTH_MODE=iis``): queries LDAP for AD group membership (cached)
+- IIS mode (``AUTH_MODE=iis``): queries LDAP for AD group membership (per-request)
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Callable
 
-from django.conf import settings
-from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils.decorators import sync_and_async_middleware
 from rest_framework.exceptions import AuthenticationFailed
 
 from api.constants import AD_GROUP_TO_ROLE_MAP, ROLE_ADMIN, ROLE_VIEWER
+from api.middleware.request_id import request_id_var
 from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
+
+logger = logging.getLogger(__name__)
 
 
 @sync_and_async_middleware
@@ -122,14 +124,23 @@ class AuthorizationMiddleware:
                 return None
 
             raise ImproperlyConfigured(f"Unknown authz policy '{policy}'.")
-        except AuthenticationFailed:
+        except AuthenticationFailed as exc:
+            logger.warning("authentication failed: %s %s — %s", request.method, request.path, exc)
             return JsonResponse(
-                {"detail": "Authentication credentials were not provided."},
+                {
+                    "detail": "Authentication credentials were not provided.",
+                    "request_id": request_id_var.get(),
+                },
                 status=401,
             )
-        except PermissionDenied:
+        except PermissionDenied as exc:
+            username = getattr(request.user, "username", None) or "anonymous"
+            logger.warning("permission denied: %s %s %s — %s", username, request.method, request.path, exc)
             return JsonResponse(
-                {"detail": "You do not have permission to perform this action."},
+                {
+                    "detail": "You do not have permission to perform this action.",
+                    "request_id": request_id_var.get(),
+                },
                 status=403,
             )
 
@@ -172,7 +183,8 @@ class AuthorizationMiddleware:
         """Resolve application roles for a user.
 
         In dev mode, reads from ``DEV_USER_ROLE`` environment variable.
-        In IIS mode, queries LDAP for AD group membership (with caching).
+        In IIS mode, queries LDAP for AD group membership on every request.
+        Results are not cached — AD changes take immediate effect.
 
         Args:
             username: The username to resolve roles for.
@@ -184,26 +196,13 @@ class AuthorizationMiddleware:
             dev_role = os.getenv("DEV_USER_ROLE", "admin").lower()
             return [ROLE_ADMIN] if dev_role == "admin" else [ROLE_VIEWER]
 
-        cache_key = f"ldap_groups_{username}"
-
-        cached_roles = cache.get(cache_key)
-        if cached_roles is not None:
-            # cache.get() returns Any; we know the stored value is list[str]
-            # because we are the only writer (see cache.set below).
-            return cached_roles  # type: ignore[no-any-return]
-
         ad_groups = query_ldap_groups(username)
 
-        roles = list(
+        return list(
             dict.fromkeys(
                 AD_GROUP_TO_ROLE_MAP[g] for g in ad_groups if g in AD_GROUP_TO_ROLE_MAP
             )
         )
-
-        cache_ttl = getattr(settings, "LDAP_CACHE_TTL", 300)
-        cache.set(cache_key, roles, cache_ttl)
-
-        return roles
 
 
 def query_ldap_groups(username: str) -> list[str]:

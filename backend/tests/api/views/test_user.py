@@ -46,6 +46,14 @@ class TestUserView:
         assert response.status_code == 200
         assert "app_viewer" in response.json()["roles"]
 
+    @pytest.mark.django_db
+    def test_user_response_has_private_cache_header(self, admin_client: Client) -> None:
+        """GET /api/user/ returns private no-cache directives."""
+        response = admin_client.get("/api/user/")
+        cache_control = response.headers.get("Cache-Control", "")
+        assert "private" in cache_control
+        assert "no-cache" in cache_control
+
     def test_unauthenticated_returns_401(self, unauthenticated_client: Client) -> None:
         """Unauthenticated request is rejected with 401."""
         response = unauthenticated_client.get("/api/user/")
@@ -56,9 +64,7 @@ class TestUserView:
         """Authenticated user without mapped roles is rejected with 403 JSON."""
         response = unauthorized_client.get("/api/user/")
         assert response.status_code == 403
-        assert response.json() == {
-            "detail": "You do not have permission to perform this action."
-        }
+        assert response.json()["detail"] == "You do not have permission to perform this action."
 
     @pytest.mark.django_db
     def test_method_not_allowed_post(self, admin_client: Client) -> None:

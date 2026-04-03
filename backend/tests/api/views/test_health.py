@@ -32,6 +32,13 @@ class TestHealthView:
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 
+    def test_health_response_has_public_cache_header(self) -> None:
+        """GET /api/health/ returns short-lived public cache directives."""
+        response = self.client.get("/api/health/")
+        cache_control = response.headers.get("Cache-Control", "")
+        assert "public" in cache_control
+        assert "max-age=5" in cache_control
+
     def test_health_method_not_allowed_post(self) -> None:
         """POST /api/health/ returns HTTP 405 Method Not Allowed."""
         response = self.client.post("/api/health/")

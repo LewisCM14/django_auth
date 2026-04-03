@@ -7,16 +7,16 @@ must explicitly set authorization at the view level.
 
 Role resolution happens only when a view requires roles:
 - Dev mode: reads ``DEV_USER_ROLE`` environment variable
-- IIS mode: queries LDAP (with caching) for AD group membership
+- IIS mode: queries LDAP (per-request) for AD group membership
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
-from django.core.cache import cache
 from django.test import override_settings
 
 from api.constants import ROLE_ADMIN, ROLE_VIEWER
@@ -56,10 +56,6 @@ class TestAuthorizationMiddlewareDevMode:
         response = Mock()
         response.status_code = 200
         return response
-
-    def setup_method(self) -> None:
-        """Clear cache before each test."""
-        cache.clear()
 
     @override_settings(DEBUG=True)
     def test_dev_mode_assigns_admin_role_from_env(self) -> None:
@@ -113,10 +109,6 @@ class TestAuthorizationMiddlewareIISMode:
         response = Mock()
         response.status_code = 200
         return response
-
-    def setup_method(self) -> None:
-        """Clear cache before each test."""
-        cache.clear()
 
     @override_settings(DEBUG=False)
     def test_user_with_admin_group_gets_admin_role(self) -> None:
@@ -188,7 +180,7 @@ class TestAuthorizationMiddlewareIISMode:
         import json
 
         body = json.loads(result.content)
-        assert body == {"detail": "You do not have permission to perform this action."}
+        assert body["detail"] == "You do not have permission to perform this action."
 
     @override_settings(DEBUG=False)
     def test_unauthenticated_request_returns_401(self) -> None:
@@ -205,8 +197,8 @@ class TestAuthorizationMiddlewareIISMode:
         assert result.status_code == 401
 
     @override_settings(DEBUG=False)
-    def test_ldap_result_is_cached(self) -> None:
-        """LDAP query result for a user is cached across requests."""
+    def test_ldap_queried_on_every_request(self) -> None:
+        """LDAP is queried on every request — results are not cached."""
         middleware = AuthorizationMiddleware(self.get_response)
         view_func = _make_roles_view()
 
@@ -215,35 +207,12 @@ class TestAuthorizationMiddlewareIISMode:
 
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
                 request1 = Mock()
-                request1.user = Mock(username="DOMAIN\\cached_user")
+                request1.user = Mock(username="DOMAIN\\repeat_user")
                 middleware.process_view(request1, view_func, [], {})
                 assert mock_ldap.call_count == 1
 
                 request2 = Mock()
-                request2.user = Mock(username="DOMAIN\\cached_user")
-                middleware.process_view(request2, view_func, [], {})
-                assert mock_ldap.call_count == 1
-
-    @override_settings(DEBUG=False)
-    def test_cache_respects_ttl(self) -> None:
-        """Cache expires after LDAP_CACHE_TTL; next request queries LDAP."""
-        middleware = AuthorizationMiddleware(self.get_response)
-        view_func = _make_roles_view()
-        username = "DOMAIN\\ttl_user"
-
-        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
-            mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
-
-            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                request1 = Mock()
-                request1.user = Mock(username=username)
-                middleware.process_view(request1, view_func, [], {})
-                assert mock_ldap.call_count == 1
-
-                cache.delete(f"ldap_groups_{username}")
-
-                request2 = Mock()
-                request2.user = Mock(username=username)
+                request2.user = Mock(username="DOMAIN\\repeat_user")
                 middleware.process_view(request2, view_func, [], {})
                 assert mock_ldap.call_count == 2
 
@@ -513,3 +482,129 @@ class TestAuthorizationMiddlewareHelpers:
         fbv.authz_roles = (ROLE_ADMIN,)  # type: ignore[attr-defined]
 
         assert middleware._get_view_attr(fbv, AUTHZ_ROLES_ATTR, tuple) == (ROLE_ADMIN,)
+
+
+class TestAuthorizationMiddlewareAuditLogging:
+    """Tests for WARNING audit logs emitted on 401 and 403 responses."""
+
+    @staticmethod
+    def get_response(request: Any) -> Mock:
+        response = Mock()
+        response.status_code = 200
+        return response
+
+    @pytest.fixture(autouse=True)
+    def enable_log_propagation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Re-enable propagation so caplog captures records from the api logger.
+
+        The LOGGING config sets propagate=False on the 'api' logger. Tests that
+        need caplog must temporarily restore propagation so records reach the root
+        logger where pytest's capture handler lives.
+        """
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
+
+    @override_settings(DEBUG=False)
+    def test_401_response_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Unauthenticated request triggers a WARNING log containing the path."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = None
+        request.method = "GET"
+        request.path = "/api/user/"
+        view_func = _make_roles_view()
+
+        with caplog.at_level(logging.WARNING, logger="api.middleware.authorization"):
+            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 401
+        records = [
+            r for r in caplog.records if r.name == "api.middleware.authorization"
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert "/api/user/" in records[0].getMessage()
+
+    @override_settings(DEBUG=False)
+    def test_403_response_logs_warning_with_username(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Authenticated user denied by role triggers a WARNING log with username and path."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\denied_user")
+        request.method = "GET"
+        request.path = "/api/user/"
+        view_func = _make_roles_view()
+
+        with caplog.at_level(logging.WARNING, logger="api.middleware.authorization"):
+            with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
+                mock_ldap.return_value = ["CN=other-group,OU=Groups,DC=corp,DC=local"]
+                with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                    result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 403
+        records = [
+            r for r in caplog.records if r.name == "api.middleware.authorization"
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        msg = records[0].getMessage()
+        assert "DOMAIN\\denied_user" in msg
+        assert "/api/user/" in msg
+
+
+class TestAuthorizationMiddlewareErrorResponseShape:
+    """Tests that 401/403 error responses include the request_id field."""
+
+    @staticmethod
+    def get_response(request: Any) -> Mock:
+        response = Mock()
+        response.status_code = 200
+        return response
+
+    @override_settings(DEBUG=False)
+    def test_401_response_includes_request_id(self) -> None:
+        """401 JSON body contains a request_id key."""
+        import json
+
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = None
+        request.method = "GET"
+        request.path = "/api/user/"
+        view_func = _make_roles_view()
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 401
+        body = json.loads(result.content)
+        assert "request_id" in body
+
+    @override_settings(DEBUG=False)
+    def test_403_response_includes_request_id(self) -> None:
+        """403 JSON body contains a request_id key."""
+        import json
+
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\regular_user")
+        request.method = "GET"
+        request.path = "/api/user/"
+        view_func = _make_roles_view()
+
+        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
+            mock_ldap.return_value = ["CN=other-group,OU=Groups,DC=corp,DC=local"]
+            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 403
+        body = json.loads(result.content)
+        assert "request_id" in body
