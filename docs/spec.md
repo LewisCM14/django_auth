@@ -440,7 +440,7 @@ backend/
 
 **Get Health** (`GET /api/health/`)
 
-Returns the application status. This endpoint is unauthenticated and publicly accessible — no `REMOTE_USER` or role membership is required. Intended for use by load balancers, uptime monitors, and IIS health probes.
+Returns the application status, API version, and process uptime. This endpoint is unauthenticated and publicly accessible — no `REMOTE_USER` or role membership is required. Intended for use by load balancers, uptime monitors, and IIS health probes. The release pipeline replaces the `APP_VERSION` placeholder in `.env` with the tagged release version.
 
 Implementation note: this endpoint is explicitly marked with `@authz_public` at the view level.
 
@@ -455,7 +455,9 @@ Implementation note: this endpoint is explicitly marked with `@authz_public` at 
 *Response* `200 OK`
 ```json
 {
-    "status": "ok"
+    "status": "ok",
+    "version": "APP_VERSION",
+    "uptime_seconds": 1234
 }
 ```
 
@@ -1072,6 +1074,7 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `DEBUG`                  | No       | `True`, `False`          | `False`     | Django debug mode. Must be `False` in production. |
 | `DEV_USER_IDENTITY`      | dev only | Any string               | `dev_admin` | Mock username injected in dev mode. |
 | `DEV_USER_ROLE`          | dev only | `admin`, `viewer`        | `admin`     | Role assigned to the mock user in dev mode. |
+| `API_VERSION`            | No       | SemVer tag / build label | `APP_VERSION` | Application version surfaced by `/api/health/` and `drf-spectacular`; the tagged release pipeline replaces this placeholder with the release tag. |
 | `LDAP_SERVER_URI`        | iis only | LDAP URI                 | —           | LDAP server URI reserved for the real Active Directory group lookup implementation. |
 | `LDAP_BASE_DN`           | iis only | Distinguished name       | —           | Base DN reserved for the real Active Directory group membership search. |
 | `LOG_LEVEL`              | No       | Python log level name    | `WARNING`   | Root logger level. Overrides the default for production tuning. |
@@ -1105,6 +1108,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     DEBUG=False
     SECRET_KEY=<unique-unpredictable-value>
     ALLOWED_HOSTS=<server-hostname>
+    API_VERSION=APP_VERSION
     LDAP_SERVER_URI=ldap://dc.corp.local
     LDAP_BASE_DN=DC=corp,DC=local
     LOG_FORMAT=json
@@ -1194,7 +1198,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
     Replace `<conda-env-path>` and `<backend-root-path>` with the actual paths.
 
-    **Sanity check:** Browse to `https://<server>/api/health/` from the server itself. It should return `{"status": "ok"}` with a `200` status code. If it errors, check the IIS logs and the Django error output in the `wfastcgi` logs.
+    **Sanity check:** Browse to `https://<server>/api/health/` from the server itself. It should return `{"status": "ok", "version": "APP_VERSION", "uptime_seconds": <number>}` before release tagging, and the tagged release pipeline should replace `APP_VERSION` with the release tag. If it errors, check the IIS logs and the Django error output in the `wfastcgi` logs.
 
 1. **Enable Windows Authentication**
 
@@ -1235,7 +1239,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
     | Step | Action | Expected Result |
     |------|--------|-----------------|
-    | 1 | `GET /api/health/` | `200 OK` — `{"status": "ok"}` (no authentication required) |
+    | 1 | `GET /api/health/` | `200 OK` — `{"status": "ok", "version": "APP_VERSION", "uptime_seconds": <number>}` before release tagging; the pipeline replaces the placeholder with the release tag (no authentication required) |
     | 2 | `GET /api/user/` (unauthenticated / anonymous) | `401 Unauthorized` |
     | 3 | `GET /api/user/` (domain user in configured AD group) | `200 OK` — `{"username": "DOMAIN\\user", "roles": [...]}` |
     | 4 | `GET /api/user/` (domain user not in any configured group) | `403 Forbidden` |

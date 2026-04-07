@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 from django.core.cache import cache
+from django.conf import settings
 from django.test import Client
 
+import api.views.health as health_module
 from api.views.health import HealthView
 
 
@@ -23,17 +25,30 @@ class TestHealthView:
         response = self.client.get("/api/health/")
         assert response.status_code == 200
 
-    def test_health_returns_status_ok(self) -> None:
-        """GET /api/health/ returns response body with status=ok."""
+    def test_health_returns_status_version_and_uptime(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """GET /api/health/ returns status, version, and uptime."""
+        monkeypatch.setattr(health_module, "PROCESS_START_MONOTONIC", 100.0)
+        monkeypatch.setattr(health_module.time, "monotonic", lambda: 112.9)
+
         response = self.client.get("/api/health/")
-        assert response.json() == {"status": "ok"}
+        assert response.json() == {
+            "status": "ok",
+            "version": settings.API_VERSION,
+            "uptime_seconds": 12,
+        }
 
     def test_health_allows_unauthenticated_access(self) -> None:
         """GET /api/health/ succeeds without REMOTE_USER header."""
         # Ensure no REMOTE_USER is set and request still succeeds
         response = self.client.get("/api/health/")
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["version"] == settings.API_VERSION
+        assert isinstance(payload["uptime_seconds"], int)
+        assert payload["uptime_seconds"] >= 0
 
     def test_health_response_has_public_cache_header(self) -> None:
         """GET /api/health/ returns short-lived public cache directives."""

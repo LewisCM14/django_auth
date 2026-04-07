@@ -110,6 +110,38 @@ class TestSettingsCacheConfig:
         )
 
 
+class TestSettingsVersionConfig:
+    """Tests for API version configuration exported by settings."""
+
+    def test_api_version_defaults_to_placeholder_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """API_VERSION defaults to the APP_VERSION placeholder."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.delenv("API_VERSION", raising=False)
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_api_version_default")
+
+        assert module.API_VERSION == "APP_VERSION"
+        assert module.SPECTACULAR_SETTINGS["VERSION"] == "APP_VERSION"
+
+    def test_api_version_is_loaded_and_reused_by_docs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """API_VERSION is loaded from env and reused by SPECTACULAR_SETTINGS."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("API_VERSION", "2026.04.07")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_api_version")
+
+        assert module.API_VERSION == "2026.04.07"
+        assert module.SPECTACULAR_SETTINGS["VERSION"] == "2026.04.07"
+
+
 class TestSettingsLdapConfig:
     """Tests for LDAP configuration exported by settings."""
 

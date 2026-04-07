@@ -1,18 +1,24 @@
 """Health check endpoint.
 
 Provides a simple status endpoint for monitoring and load balancer checks.
+Returns service status, API version, and process uptime.
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
+from django.conf import settings
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from api.caching import cache_public
 from api.permissions import authz_public
 from api.throttling import throttle
+
+
+PROCESS_START_MONOTONIC = time.monotonic()
 
 
 @throttle("60/minute")
@@ -22,7 +28,8 @@ class HealthView(APIView):
     """Health check endpoint returning service status.
 
     This endpoint is unauthenticated and publicly accessible for use by
-    load balancers, uptime monitors, and health checks.
+    load balancers, uptime monitors, and health checks. It reports the
+    configured API version and the current process uptime.
     """
 
     def get(self, request: Any) -> Response:
@@ -32,6 +39,12 @@ class HealthView(APIView):
             request: The HTTP request object.
 
         Returns:
-            Response with status=ok and HTTP 200 status code.
+            Response with status, version, uptime, and HTTP 200 status code.
         """
-        return Response({"status": "ok"})
+        return Response(
+            {
+                "status": "ok",
+                "version": settings.API_VERSION,
+                "uptime_seconds": int(time.monotonic() - PROCESS_START_MONOTONIC),
+            }
+        )

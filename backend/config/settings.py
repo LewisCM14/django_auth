@@ -107,6 +107,10 @@ CORS_ALLOWED_ORIGINS: list[str] = [
 # Local development can allow all origins; non-dev environments must opt in explicitly.
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 
+# Release version surfaced by /api/health/ and OpenAPI docs.
+# Tagged-release overwrite this placeholder in .env.
+API_VERSION: str = os.getenv("API_VERSION", "APP_VERSION").strip() or "APP_VERSION"
+
 # LDAP settings are required for IIS mode; optional for dev mode.
 # In IIS mode, query_ldap_groups uses these to look up user group membership.
 LDAP_SERVER_URI: str = os.getenv("LDAP_SERVER_URI", "").strip()
@@ -139,7 +143,7 @@ REST_FRAMEWORK = {
 SPECTACULAR_SETTINGS = {
     "TITLE": "Django Authentication & Authorization API",
     "DESCRIPTION": "BFF API for IIS/AD-backed authentication and authorization.",
-    "VERSION": "0.1.0",
+    "VERSION": API_VERSION,
 }
 
 # Single-process cache backend used for throttling and app-level caching.
