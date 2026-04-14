@@ -141,6 +141,19 @@ class TestSettingsVersionConfig:
         assert module.API_VERSION == "2026.04.07"
         assert module.SPECTACULAR_SETTINGS["VERSION"] == "2026.04.07"
 
+    def test_swagger_ui_uses_sidecar_assets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Swagger UI settings point at bundled sidecar assets for offline use."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_swagger_sidecar")
+
+        assert "drf_spectacular_sidecar" in module.INSTALLED_APPS
+        assert module.SPECTACULAR_SETTINGS["SWAGGER_UI_DIST"] == "SIDECAR"
+        assert module.SPECTACULAR_SETTINGS["SWAGGER_UI_FAVICON_HREF"] == "SIDECAR"
+        assert module.SPECTACULAR_SETTINGS["REDOC_DIST"] == "SIDECAR"
+
 
 class TestSettingsLdapConfig:
     """Tests for LDAP configuration exported by settings."""

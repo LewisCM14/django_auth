@@ -137,7 +137,7 @@ Django 6.0+  ·  Django REST Framework 3.0+`"]
     AUTH["`Auth &amp; Directory
 IIS Windows Authentication  ·  ldap3  ·  Active Directory`"]
     LIBS["`Application Libraries
-drf-spectacular  ·  django-cors-headers
+drf-spectacular  ·  drf-spectacular-sidecar  ·  django-cors-headers
 python-dotenv  ·  LocMemCache`"]
 
     INFRA --> LANG
@@ -161,7 +161,7 @@ djangorestframework >= 3.0.0`"]
         AUTH_L1["`Auth &amp; Directory
 ldap3 >= 2.9  ·  Active Directory (LDAP)`"]
         LIBS_L1["`Libraries
-drf-spectacular  ·  django-cors-headers  ·  python-dotenv`"]
+drf-spectacular  ·  drf-spectacular-sidecar  ·  django-cors-headers  ·  python-dotenv`"]
         INFRA_L1["`Infrastructure
 Python 3.14  ·  Windows Server 2022  ·  IIS  ·  wfastcgi`"]
     end
@@ -523,6 +523,7 @@ Designed to be called by the frontend on initial load to populate a context prov
 
 **API Documentation** (`GET /api/docs/`)
 - Serves the interactive Swagger UI for exploring and testing endpoints.
+- Uses bundled `drf-spectacular-sidecar` assets so the page works without CDN access.
 - Requires IIS authentication (any domain user) but no specific application role.
 - Implemented via `api/views/docs.py` wrapper view marked `@authz_authenticated`.
 
@@ -1097,7 +1098,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     conda activate django_auth
     ```
 
-    **Sanity check:** Run `python --version` and confirm it outputs `3.14.x`. Run `conda list` and verify `django`, `djangorestframework`, `ldap3`, `drf-spectacular`, `django-cors-headers`, and `python-dotenv` are all present.
+    **Sanity check:** Run `python --version` and confirm it outputs `3.14.x`. Run `conda list` and verify `django`, `djangorestframework`, `ldap3`, `drf-spectacular`, `drf-spectacular-sidecar`, `django-cors-headers`, and `python-dotenv` are all present.
 
 1. **Configure Environment Variables**
 
@@ -1130,13 +1131,13 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
 1. **Collect Static Files**
 
-    Collect static assets for `drf-spectacular`'s Swagger UI:
+    Collect static assets for the bundled Swagger UI:
 
     ```powershell
     python manage.py collectstatic --noinput
     ```
 
-    **Sanity check:** Confirm the `STATIC_ROOT` directory exists and contains files (e.g., `drf-spectacular` CSS/JS assets).
+    **Sanity check:** Confirm the `STATIC_ROOT` directory exists and contains files (e.g., `drf_spectacular_sidecar` CSS/JS assets).
 
 1. **Install and Configure IIS**
 
@@ -1244,7 +1245,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     | 3 | `GET /api/user/` (domain user in configured AD group) | `200 OK` — `{"username": "DOMAIN\\user", "roles": [...]}` |
     | 4 | `GET /api/user/` (domain user not in any configured group) | `403 Forbidden` |
     | 5 | `GET /api/docs/` (unauthenticated) | `401 Unauthorized` |
-    | 6 | `GET /api/docs/` (any domain user) | Swagger UI loads successfully |
+    | 6 | `GET /api/docs/` (any domain user) | Swagger UI loads successfully from local static assets |
     | 7 | `GET /api/schema/` (unauthenticated) | `401 Unauthorized` |
     | 8 | `GET /api/schema/` (any domain user) | OpenAPI 3 JSON schema returned |
 

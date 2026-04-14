@@ -7,6 +7,7 @@ dependencies:
   - django>=6.0.0
   - djangorestframework>=3.0.0
   - drf-spectacular
+  - drf-spectacular-sidecar
   - django-cors-headers
   - ldap3>=2.9
   - python-dotenv

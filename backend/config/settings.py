@@ -37,7 +37,7 @@ if not ALLOWED_HOSTS:
 
 # Apps required by the codebase:
 # - auth/contenttypes: Django User model used by custom auth middleware
-# - staticfiles/templates: drf-spectacular Swagger UI assets and HTML rendering
+# - staticfiles/templates/sidecar: drf-spectacular Swagger UI HTML and bundled assets
 # - rest_framework/drf_spectacular/corsheaders/api: core API stack
 INSTALLED_APPS = [
     "django.contrib.auth",
@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "drf_spectacular",
+    "drf_spectacular_sidecar",
     "corsheaders",
     "api",
 ]
@@ -144,6 +145,9 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Django Authentication & Authorization API",
     "DESCRIPTION": "BFF API for IIS/AD-backed authentication and authorization.",
     "VERSION": API_VERSION,
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
 }
 
 # Single-process cache backend used for throttling and app-level caching.
