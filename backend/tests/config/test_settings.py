@@ -141,7 +141,9 @@ class TestSettingsVersionConfig:
         assert module.API_VERSION == "2026.04.07"
         assert module.SPECTACULAR_SETTINGS["VERSION"] == "2026.04.07"
 
-    def test_swagger_ui_uses_sidecar_assets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_swagger_ui_uses_sidecar_assets(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Swagger UI settings point at bundled sidecar assets for offline use."""
         monkeypatch.setenv("AUTH_MODE", "dev")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
