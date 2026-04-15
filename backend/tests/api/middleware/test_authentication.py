@@ -23,6 +23,7 @@ About request.META:
 
 from __future__ import annotations
 
+from django.http import HttpRequest
 from unittest.mock import Mock, patch
 
 import pytest
@@ -36,7 +37,7 @@ class TestAuthenticationMiddlewareDevMode:
     """Tests for authentication middleware in dev mode (AUTH_MODE=dev)."""
 
     @staticmethod
-    def get_response(request):
+    def get_response(request: HttpRequest) -> Mock:
         """Mock WSGI application for middleware testing."""
         response = Mock()
         response.status_code = 200
@@ -112,7 +113,7 @@ class TestAuthenticationMiddlewareIISMode:
     """Tests for authentication middleware in IIS mode (AUTH_MODE=iis)."""
 
     @staticmethod
-    def get_response(request):
+    def get_response(request: HttpRequest) -> Mock:
         """Mock WSGI application for middleware testing."""
         response = Mock()
         response.status_code = 200
@@ -195,7 +196,8 @@ class TestAuthenticationMiddlewareIISMode:
 
         # Pre-create the user
         user, created = User.objects.get_or_create(username=remote_user)
-        original_id = user.id
+        original_pk = user.pk
+        assert original_pk is not None
 
         request = Mock()
         request.META = {"REMOTE_USER": remote_user}
@@ -205,4 +207,4 @@ class TestAuthenticationMiddlewareIISMode:
             middleware.process_request(request)
 
         # Should reuse the existing user (same ID)
-        assert User.objects.filter(username=remote_user, id=original_id).exists()
+        assert User.objects.filter(username=remote_user, pk=original_pk).exists()

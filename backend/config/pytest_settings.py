@@ -10,4 +10,10 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env.example", override=True)
 
-from .settings import *  # noqa: E402,F403
+from . import settings as _settings  # noqa: E402 - load_dotenv must run first so settings sees .env.example
+
+for name, value in vars(_settings).items():
+    if name.isupper():
+        globals()[name] = value
+
+del _settings

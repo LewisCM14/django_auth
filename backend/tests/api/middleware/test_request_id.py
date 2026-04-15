@@ -254,7 +254,6 @@ class TestRequestIdMiddlewareAccessLogging:
         """Access log shows 'anonymous' when no user is attached to the request."""
         middleware = RequestIdMiddleware(get_response=lambda r: HttpResponse())
         request = self.factory.get("/api/health/")
-        request.user = None
         middleware.process_request(request)
         response = HttpResponse(status=200)
 

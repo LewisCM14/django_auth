@@ -122,7 +122,7 @@ uv run ruff format .
 Type checking is configured with MyPy in strict mode:
 
 ```bash
-uv run mypy api config
+uv run mypy .
 ```
 
 ### 4) Tests

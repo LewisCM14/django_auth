@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import pytest
 from django.core.cache import cache
-from django.http import HttpRequest, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.test import RequestFactory
 from django.views import View
 from rest_framework.views import APIView
@@ -33,7 +34,7 @@ class TestRemoteUserRateThrottle:
     def test_authenticated_user_cache_key_contains_username(self) -> None:
         """Cache key uses authenticated username identity when available."""
         request = RequestFactory().get("/api/user/")
-        request.user = _AuthenticatedUser("DOMAIN\\admin_user")  # type: ignore[attr-defined]  # HttpRequest stubs don't allow dynamic attributes
+        request.user = cast(Any, _AuthenticatedUser("DOMAIN\\admin_user"))
 
         throttle_instance = RemoteUserRateThrottle()
 
@@ -150,6 +151,7 @@ class TestThrottleDecoratorOnDjangoView:
         response = DecoratedView.as_view()(RequestFactory().get("/decorated/"))
 
         assert response.status_code == 200
+        assert isinstance(response, HttpResponse)
         assert json.loads(response.content) == {"ok": True}
 
     def test_blocks_request_over_limit(self) -> None:
@@ -171,6 +173,7 @@ class TestThrottleDecoratorOnDjangoView:
 
         assert first_response.status_code == 200
         assert second_response.status_code == 429
+        assert isinstance(second_response, HttpResponse)
         payload = json.loads(second_response.content)
         assert "throttled" in payload["detail"].lower()
         assert "request_id" in payload
@@ -250,6 +253,7 @@ class TestThrottleDecoratorOnFunction:
         response = my_view(RequestFactory().get("/func/"))
 
         assert response.status_code == 200
+        assert isinstance(response, HttpResponse)
         assert json.loads(response.content) == {"ok": True}
 
     def test_blocks_request_over_limit(self) -> None:
@@ -266,6 +270,7 @@ class TestThrottleDecoratorOnFunction:
 
         assert first_response.status_code == 200
         assert second_response.status_code == 429
+        assert isinstance(second_response, HttpResponse)
         payload = json.loads(second_response.content)
         assert "throttled" in payload["detail"].lower()
         assert "request_id" in payload
@@ -314,7 +319,7 @@ class TestThrottleDecoratorEdgeCases:
     def test_raises_type_error_for_non_view_non_callable(self) -> None:
         """Applying @throttle to an invalid target raises TypeError."""
         with pytest.raises(TypeError, match="@throttle can only decorate"):
-            throttle("10/minute")("not_a_view_or_callable")  # type: ignore[arg-type]  # intentionally passing invalid type to test TypeError guard
+            throttle("10/minute")("not_a_view_or_callable")
 
 
 class TestThrottleExempt:

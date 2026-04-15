@@ -93,7 +93,7 @@ class TestCachePublicDecorator:
     def test_raises_for_invalid_target(self) -> None:
         """Applying @cache_public to a non-view raises TypeError."""
         with pytest.raises(TypeError, match="@cache_public"):
-            cache_public(max_age=5)("not_a_view")  # type: ignore[arg-type]  # intentionally passing invalid type to test TypeError guard
+            cache_public(max_age=5)("not_a_view")
 
 
 class TestCachePrivateDecorator:
@@ -141,7 +141,7 @@ class TestCachePrivateDecorator:
     def test_raises_for_invalid_target(self) -> None:
         """Applying @cache_private to a non-view raises TypeError."""
         with pytest.raises(TypeError, match="@cache_private"):
-            cache_private("not_a_view")  # type: ignore[arg-type]  # intentionally passing invalid type to test TypeError guard
+            cache_private("not_a_view")
 
 
 class TestCacheDisabledDecorator:
@@ -187,7 +187,7 @@ class TestCacheDisabledDecorator:
     def test_raises_for_invalid_target(self) -> None:
         """Applying @cache_disabled to a non-view raises TypeError."""
         with pytest.raises(TypeError, match="@cache_disabled"):
-            cache_disabled("not_a_view")  # type: ignore[arg-type]  # intentionally passing invalid type to test TypeError guard
+            cache_disabled("not_a_view")
 
 
 class TestCacheCallableNonResponse:

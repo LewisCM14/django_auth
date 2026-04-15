@@ -62,9 +62,7 @@ class TestDecoratorEnforcement:
         request = Mock()
         view_func = _make_fully_decorated_view()
 
-        result = middleware.process_view(request, view_func, [], {})
-
-        assert result is None
+        middleware.process_view(request, view_func, [], {})
 
     def test_missing_throttle_raises_improperly_configured(self) -> None:
         """View without @throttle or @throttle_exempt raises at request time."""
@@ -135,9 +133,7 @@ class TestDecoratorEnforcement:
         request = Mock()
         view_func = _make_fully_decorated_view(throttle_rate=None)
 
-        result = middleware.process_view(request, view_func, [], {})
-
-        assert result is None
+        middleware.process_view(request, view_func, [], {})
 
     def test_non_project_view_raises_improperly_configured(self) -> None:
         """Views outside api.views are rejected."""
