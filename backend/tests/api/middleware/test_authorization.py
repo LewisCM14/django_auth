@@ -6,7 +6,7 @@ must resolve to one of ``@authz_public``, ``@authz_authenticated``, or
 ``@authz_roles(...)`` for authorization checks to proceed.
 
 Role resolution happens only when a view requires roles:
-- Dev mode: reads ``DEV_USER_ROLE`` environment variable
+- Dev mode: reads ``DEV_USER_ROLE`` environment variable and requires it to match ``api.constants.ROLES``
 - IIS mode: queries LDAP (per-request) for AD group membership
 """
 
@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from api.constants import ROLE_ADMIN, ROLE_VIEWER
@@ -59,45 +60,59 @@ class TestAuthorizationMiddlewareDevMode:
 
     @override_settings(DEBUG=True)
     def test_dev_mode_assigns_admin_role_from_env(self) -> None:
-        """In dev mode with DEV_USER_ROLE=admin, user gets app_admin role."""
+        """In dev mode with DEV_USER_ROLE=app_admin, user gets app_admin role."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="dev_admin")
+        view_func = _make_roles_view()
+
+        with patch.dict(
+            "os.environ", {"AUTH_MODE": "dev", "DEV_USER_ROLE": ROLE_ADMIN}
+        ):
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
+        assert ROLE_ADMIN in request.user.roles
+
+    @override_settings(DEBUG=True)
+    def test_dev_mode_requires_explicit_role(self) -> None:
+        """When DEV_USER_ROLE is not set, dev mode fails fast."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="dev_admin")
+        view_func = _make_roles_view()
+
+        with patch.dict("os.environ", {"AUTH_MODE": "dev"}, clear=True):
+            with pytest.raises(ImproperlyConfigured, match="DEV_USER_ROLE"):
+                middleware.process_view(request, view_func, [], {})
+
+    @override_settings(DEBUG=True)
+    def test_dev_mode_viewer_role_from_env(self) -> None:
+        """In dev mode with DEV_USER_ROLE=app_viewer, user gets app_viewer role."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="dev_viewer")
+        view_func = _make_roles_view()
+
+        with patch.dict(
+            "os.environ", {"AUTH_MODE": "dev", "DEV_USER_ROLE": ROLE_VIEWER}
+        ):
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
+        assert request.user.roles == [ROLE_VIEWER]
+
+    @override_settings(DEBUG=True)
+    def test_dev_mode_rejects_non_canonical_role(self) -> None:
+        """In dev mode, legacy shorthand roles are rejected."""
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="dev_admin")
         view_func = _make_roles_view()
 
         with patch.dict("os.environ", {"AUTH_MODE": "dev", "DEV_USER_ROLE": "admin"}):
-            result = middleware.process_view(request, view_func, [], {})
-
-        assert result is None
-        assert ROLE_ADMIN in request.user.roles
-
-    @override_settings(DEBUG=True)
-    def test_dev_mode_defaults_to_admin(self) -> None:
-        """When DEV_USER_ROLE is not set, defaults to admin."""
-        middleware = AuthorizationMiddleware(self.get_response)
-        request = Mock()
-        request.user = Mock(username="dev_admin")
-        view_func = _make_roles_view()
-
-        with patch.dict("os.environ", {"AUTH_MODE": "dev"}, clear=False):
-            result = middleware.process_view(request, view_func, [], {})
-
-        assert result is None
-        assert ROLE_ADMIN in request.user.roles
-
-    @override_settings(DEBUG=True)
-    def test_dev_mode_viewer_role_from_env(self) -> None:
-        """In dev mode with DEV_USER_ROLE=viewer, user gets app_viewer role."""
-        middleware = AuthorizationMiddleware(self.get_response)
-        request = Mock()
-        request.user = Mock(username="dev_viewer")
-        view_func = _make_roles_view()
-
-        with patch.dict("os.environ", {"AUTH_MODE": "dev", "DEV_USER_ROLE": "viewer"}):
-            result = middleware.process_view(request, view_func, [], {})
-
-        assert result is None
-        assert request.user.roles == [ROLE_VIEWER]
+            with pytest.raises(ImproperlyConfigured, match="DEV_USER_ROLE"):
+                middleware.process_view(request, view_func, [], {})
 
 
 class TestAuthorizationMiddlewareIISMode:

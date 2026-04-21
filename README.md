@@ -26,7 +26,7 @@ SECRET_KEY=change-me
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
 DEV_USER_IDENTITY=dev_admin
-DEV_USER_ROLE=admin
+DEV_USER_ROLE=app_admin
 ```
 
 ### 4) Apply migrations
@@ -62,7 +62,7 @@ Set in `backend/.env`:
 ```env
 AUTH_MODE=dev
 DEV_USER_IDENTITY=dev_admin
-DEV_USER_ROLE=admin
+DEV_USER_ROLE=app_admin
 ```
 
 ### Viewer role
@@ -72,7 +72,7 @@ Set in `backend/.env`:
 ```env
 AUTH_MODE=dev
 DEV_USER_IDENTITY=dev_viewer
-DEV_USER_ROLE=viewer
+DEV_USER_ROLE=app_viewer
 ```
 
 ### Apply changes

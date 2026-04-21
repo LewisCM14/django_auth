@@ -9,7 +9,8 @@ set by the permission decorators in ``api.permissions``:
 
 Role resolution happens only for role-protected views:
 
-- Dev mode (``AUTH_MODE=dev``): reads ``DEV_USER_ROLE`` from environment
+- Dev mode (``AUTH_MODE=dev``): reads ``DEV_USER_ROLE`` from environment and
+    requires it to match one of the canonical roles defined in ``api.constants.ROLES``
 - IIS mode (``AUTH_MODE=iis``): queries LDAP for AD group membership (per-request)
 
 This middleware is responsible only for authentication and role checks implied
@@ -33,7 +34,7 @@ from django.conf import settings
 from ldap3 import Connection, Server, SUBTREE
 from ldap3.utils.conv import escape_filter_chars
 
-from api.constants import AD_GROUP_TO_ROLE_MAP, ROLE_ADMIN, ROLE_VIEWER
+from api.constants import AD_GROUP_TO_ROLE_MAP, ROLES
 from api.middleware.request_id import request_id_var
 from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
 
@@ -203,8 +204,12 @@ class AuthorizationMiddleware:
             List of application roles the user belongs to.
         """
         if os.getenv("AUTH_MODE", "iis") == "dev":
-            dev_role = os.getenv("DEV_USER_ROLE", "admin").lower()
-            return [ROLE_ADMIN] if dev_role == "admin" else [ROLE_VIEWER]
+            dev_role = os.getenv("DEV_USER_ROLE", "").strip()
+            if dev_role not in ROLES:
+                raise ImproperlyConfigured(
+                    "DEV_USER_ROLE must match one of the application roles defined in api.constants.ROLES."
+                )
+            return [dev_role]
 
         ad_groups = query_ldap_groups(username)
 
