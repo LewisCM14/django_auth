@@ -12,6 +12,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from api.caching import cache_private
 from api.permissions import authz_authenticated
 from api.throttling import throttle
+from api.views.base import BaseAPIView
 
 
 def _is_higher_order_type_hint_compat(hint: object) -> bool:
@@ -40,7 +41,7 @@ spectacular_openapi.is_higher_order_type_hint = _is_higher_order_type_hint_compa
 @throttle("10/minute")
 @cache_private
 @authz_authenticated
-class SchemaView(SpectacularAPIView):
+class SchemaView(SpectacularAPIView, BaseAPIView):
     """OpenAPI schema endpoint wrapper.
 
     Requires IIS authentication (any domain user) but no specific role.
@@ -50,7 +51,7 @@ class SchemaView(SpectacularAPIView):
 @throttle("30/minute")
 @cache_private
 @authz_authenticated
-class SwaggerDocsView(SpectacularSwaggerView):
+class SwaggerDocsView(SpectacularSwaggerView, BaseAPIView):
     """Swagger UI docs endpoint wrapper.
 
     Requires IIS authentication (any domain user) but no specific role.

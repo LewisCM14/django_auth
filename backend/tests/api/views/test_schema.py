@@ -31,6 +31,14 @@ class TestSchemaEndpoints:
         )
 
     @pytest.mark.django_db
+    def test_schema_includes_health_and_user_paths(self, admin_client: Client) -> None:
+        """GET /api/schema/ includes the application endpoints."""
+        response = admin_client.get("/api/schema/")
+        assert response.status_code == 200
+        assert b"/api/health/" in response.content
+        assert b"/api/user/" in response.content
+
+    @pytest.mark.django_db
     def test_docs_returns_200(self, admin_client: Client) -> None:
         """GET /api/docs/ returns HTTP 200 for authenticated users."""
         response = admin_client.get("/api/docs/")

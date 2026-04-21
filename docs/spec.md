@@ -182,7 +182,8 @@ ruff >= 0.15.9`"]
 ### Workflow
 
 1. API Layer (`Django REST Framework (DRF)`)
-    - Exposes stable endpoints.
+    - Exposes stable endpoints as DRF `APIView` subclasses, with a thin shared `api/views/base.py::BaseAPIView` providing common request-user helpers.
+    - Every endpoint provides explicit schema metadata (via `serializer_class` or `@extend_schema`) so `drf-spectacular` can generate a complete OpenAPI document, including simple JSON endpoints such as `/api/health/` and `/api/user/`.
     - Relies on the custom `api.middleware.authentication.AuthenticationMiddleware` to resolve the IIS-provided `REMOTE_USER` into a Django `User`, or attach `AnonymousUser` when no identity is present.
     - Uses `ldap3` library to query Active Directory for group membership on every `@authz_roles` request. Results are not cached — AD changes take immediate effect.
     - Maps AD group membership to Django user roles for authorization (e.g., admin access).
@@ -337,34 +338,40 @@ backend/
 ├── api/
 │   ├── __init__.py
 │   ├── apps.py
+│   ├── cache_keys.py
+│   ├── caching.py
 │   ├── constants.py
 │   ├── exceptions.py
-│   ├── models.py
 │   ├── middleware/
 │   │   ├── __init__.py
-│   │   ├── request_id.py
 │   │   ├── authentication.py
+│   │   ├── authorization.py
 │   │   ├── enforcement.py
-│   │   └── authorization.py
+│   │   └── request_id.py
+│   ├── models.py
 │   ├── permissions.py
-│   ├── caching.py
+│   ├── request_user.py
+│   ├── serializers/
+│   │   ├── __init__.py
+│   │   ├── health_serializer.py
+│   │   └── user_serializer.py
+│   ├── services/
+│   │   └── __init__.py
 │   ├── throttling.py
 │   ├── urls.py
 │   ├── views/
 │   │   ├── __init__.py
+│   │   ├── base.py
 │   │   ├── docs.py
 │   │   ├── health.py
 │   │   └── user.py
-│   ├── serializers/
-│   │   ├── __init__.py
-│   │   └── user_serializer.py
-│   ├── services/
-│   │   └── __init__.py
 │   ├── adapters/
 │   │   └── __init__.py
 │   └── migrations/
 ├── config/
 │     ├── __init__.py
+│     ├── logging.py
+│     ├── pytest_settings.py
 │     ├── settings.py
 │     ├── urls.py
 │     └── wsgi.py
@@ -372,21 +379,29 @@ backend/
 │   ├── __init__.py
 │   ├── conftest.py
 │   ├── api/
+│   │   ├── __init__.py
 │   │   ├── middleware/
+│   │   │   ├── __init__.py
 │   │   │   ├── test_authentication.py
 │   │   │   ├── test_authorization.py
 │   │   │   ├── test_enforcement.py
 │   │   │   └── test_request_id.py
 │   │   ├── views/
+│   │   │   ├── __init__.py
 │   │   │   ├── test_health.py
 │   │   │   ├── test_schema.py
 │   │   │   └── test_user.py
 │   │   ├── test_apps.py
+│   │   ├── test_cache_key_enforcement.py
+│   │   ├── test_cache_keys.py
 │   │   ├── test_caching.py
 │   │   ├── test_exceptions.py
 │   │   ├── test_permissions.py
-│   │   └── test_throttling.py
+│   │   ├── test_view_base_class.py
+│   │   ├── test_throttling.py
+│   │   └── test_view_decorator_order.py
 │   └── config/
+│       ├── __init__.py
 │       ├── test_logging.py
 │       ├── test_settings.py
 │       └── test_wsgi.py
@@ -404,32 +419,38 @@ backend/
 |-------------------------------------|----------------------|----------------|
 | `api/`                              | All backend layers   | Main Django app (see below for subfolders) |
 | `api/apps.py`                       | API                  | Django app config with startup security guard (validates AUTH_MODE and DEBUG settings) |
+| `api/cache_keys.py`                 | Cross-cutting        | Shared cache key builders and guardrails for adapter, service, and view caches |
 | `api/constants.py`                  | Cross-cutting        | Role definitions (ROLE_ADMIN, ROLE_VIEWER), AD group-to-role mapping |
 | `api/exceptions.py`                 | Cross-cutting        | Custom DRF exception handler — standardises all error responses and logs exceptions with request-ID correlation |
 | `api/models.py`                     | Persistence          | ORM models |
 | `api/middleware/`                   | API/Cross-cutting    | Middleware package (see below) |
-| `api/middleware/request_id.py`      | Cross-cutting        | Request-ID injection middleware |
-| `api/middleware/authentication.py`  | API                  | Resolves `REMOTE_USER` into a Django `User` in IIS mode and injects a mock identity in dev mode; attaches `AnonymousUser` when unauthenticated |
+| `api/middleware/request_id.py`      | Cross-cutting        | Request-ID injection middleware and correlated access logging |
+| `api/middleware/authentication.py`  | API                  | Resolves `REMOTE_USER` into a Django `User` in IIS mode and injects a mock identity in dev mode; attaches `AnonymousUser` when unauthenticated and preserves `_cached_user` for DRF wrappers |
 | `api/middleware/enforcement.py`    | API/Cross-cutting    | Decorator enforcement — ensures every view declares `@throttle`/`@cache_*`/`@authz_*` decorators |
 | `api/middleware/authorization.py`   | API                  | LDAP group membership lookup, role mapping, and access control |
 | `api/urls.py`                       | API                  | URL routing to views package |
-| `api/views/`                        | API                  | HTTP request handling, input validation, response shaping |
-| `api/views/health.py`               | API                  | Health check endpoint |
-| `api/views/docs.py`                 | API                  | Wrapper views for schema/docs endpoints with explicit auth policy |
-| `api/views/user.py`                 | API                  | User identity and role endpoint |
+| `api/views/`                        | API                  | DRF `APIView` request handling, input validation, response shaping, and schema metadata |
+| `api/views/base.py`                 | API                  | Thin shared `BaseAPIView` for common request-user helpers and base view structure |
+| `api/views/health.py`               | API                  | Health check `APIView` with explicit response serializer metadata |
+| `api/views/docs.py`                 | API                  | Wrapper views for schema/docs endpoints with explicit auth policy and shared base inheritance |
+| `api/views/user.py`                 | API                  | User identity and role `APIView` |
 | `api/permissions.py`                | API/Cross-cutting    | Per-view authorization permission decorators (`@authz_public`, `@authz_authenticated`, `@authz_roles`) |
 | `api/caching.py`                    | Cross-cutting        | `@cache_public`, `@cache_private`, `@cache_disabled` decorators — per-view HTTP cache-control policy with enforcement via middleware |
 | `api/throttling.py`                 | Cross-cutting        | `@throttle` and `@throttle_exempt` decorators — per-view, per-user rate limiting with explicit rate strings; `RemoteUserRateThrottle` keyed on `REMOTE_USER` identity |
 | `api/serializers/`                  | API                  | Serializer package and export surface |
+| `api/serializers/health_serializer.py` | API               | Health endpoint response serializer (`HealthSerializer`) |
 | `api/serializers/user_serializer.py`| API                  | User identity/roles response serializer (`UserSerializer`) |
+| `api/request_user.py`               | Cross-cutting        | Helper for resolving the middleware-attached request user across DRF wrappers and request logging |
 | `api/services/`                     | Service              | Business logic, orchestration, state machines, normalization & mapping |
 | `api/adapters/`                     | Source Adapter       | External data-source access with resilience patterns |
 | `api/migrations/`                   | Persistence          | Django migration history |
 | `config/`                           | Cross-cutting        | Django and app configuration (settings, WSGI, logging, etc.) |
 | `config/logging.py`                 | Cross-cutting        | `JsonFormatter` — custom `logging.Formatter` subclass for structured JSON output |
+| `config/pytest_settings.py`         | Cross-cutting        | Test-only settings bootstrap that loads `.env.example` before importing base settings |
 | `tests/`                            | Cross-cutting        | Automated test suite (`pytest`) mirroring source structure |
 | `tests/conftest.py`                 | Cross-cutting        | Shared pytest fixtures and test configuration |
-| `tests/api/`                        | API/Cross-cutting    | API-layer unit and integration tests |
+| `tests/api/`                        | API/Cross-cutting    | API-layer unit and integration tests, including schema and decorator guardrails |
+| `tests/api/test_view_base_class.py` | API/Cross-cutting    | Guardrail tests for shared `BaseAPIView` inheritance and serializer metadata |
 | `tests/api/middleware/`             | API/Cross-cutting    | Middleware tests (authentication, authorization, enforcement, request-id) |
 | `tests/api/views/`                  | API                  | Endpoint behavior tests (`health`, `schema/docs`, `user`) |
 | `tests/config/`                     | Cross-cutting        | Config/module tests (`settings`, `wsgi`, `logging`) |
@@ -442,7 +463,7 @@ backend/
 
 Returns the application status, API version, and process uptime. This endpoint is unauthenticated and publicly accessible — no `REMOTE_USER` or role membership is required. Intended for use by load balancers, uptime monitors, and IIS health probes. The release pipeline replaces the `APP_VERSION` placeholder in `.env` with the tagged release version.
 
-Implementation note: this endpoint is explicitly marked with `@authz_public` at the view level.
+Implementation note: this endpoint is implemented as a DRF `APIView`, is explicitly marked with `@authz_public`, and declares response serializer metadata so it appears in `drf-spectacular`.
 
 | Property        | Value                      |
 |-----------------|----------------------------|
@@ -468,6 +489,8 @@ Implementation note: this endpoint is explicitly marked with `@authz_public` at 
 Returns the authenticated user's identity and assigned roles. Requires a valid `REMOTE_USER` (provided by IIS in production or injected by dev-mode middleware locally). The authorization middleware resolves the user's AD group memberships (via LDAP, queried per-request) and maps them to application roles before the request reaches this view.
 
 Designed to be called by the frontend on initial load to populate a context provider (`UserContext`) or state store (e.g., Redux slice / Zustand store). The response shape is intentionally flat and self-contained so the frontend can store it directly without transformation.
+
+Implementation note: this endpoint is implemented as a DRF `APIView` and declares response serializer metadata so it appears in `drf-spectacular`.
 
 | Property        | Value                      |
 |-----------------|----------------------------|

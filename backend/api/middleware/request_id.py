@@ -15,6 +15,8 @@ import uuid
 from django.http import HttpRequest, HttpResponse
 from django.utils.deprecation import MiddlewareMixin
 
+from api.request_user import get_request_user
+
 logger = logging.getLogger(__name__)
 
 # Module-level context variable holding the current request ID.
@@ -92,7 +94,7 @@ class RequestIdMiddleware(MiddlewareMixin):
         start: float = getattr(request, "_start_time", time.monotonic())
         duration_ms: float = (time.monotonic() - start) * 1000
         # Resolve the username — authenticated user or anonymous.
-        user = getattr(request, "user", None)
+        user = get_request_user(request)
         username: str = (
             user.get_username() if user and user.is_authenticated else "anonymous"
         )
