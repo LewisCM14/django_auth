@@ -4,7 +4,6 @@ __pycache__/
 *.py[cod]
 .env
 db.sqlite3
-uv.lock
 .pytest_cache/
 .mypy_cache/
 .coverage
