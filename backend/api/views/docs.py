@@ -7,7 +7,7 @@ import typing
 
 import drf_spectacular.openapi as spectacular_openapi
 import drf_spectacular.plumbing as spectacular_plumbing
-from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerSplitView
 
 from api.caching import cache_private
 from api.permissions import authz_authenticated
@@ -51,7 +51,7 @@ class SchemaView(SpectacularAPIView, BaseAPIView):
 @throttle("30/minute")
 @cache_private
 @authz_authenticated
-class SwaggerDocsView(SpectacularSwaggerView, BaseAPIView):
+class SwaggerDocsView(SpectacularSwaggerSplitView, BaseAPIView):
     """Swagger UI docs endpoint wrapper.
 
     Requires IIS authentication (any domain user) but no specific role.

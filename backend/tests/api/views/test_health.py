@@ -56,6 +56,9 @@ class TestHealthView:
         cache_control = response.headers.get("Cache-Control", "")
         assert "public" in cache_control
         assert "max-age=5" in cache_control
+        assert "default-src 'none'" in response.headers.get(
+            "Content-Security-Policy", ""
+        )
 
     def test_health_method_not_allowed_post(self) -> None:
         """POST /api/health/ returns HTTP 405 Method Not Allowed."""

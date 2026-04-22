@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 
@@ -15,7 +16,7 @@ def formatter() -> JsonFormatter:
     return JsonFormatter()
 
 
-def _make_record(msg: str = "hello", **extras: str) -> logging.LogRecord:
+def _make_record(msg: str = "hello", **extras: object) -> logging.LogRecord:
     record = logging.LogRecord(
         name="test.logger",
         level=logging.INFO,
@@ -75,3 +76,46 @@ class TestJsonFormatter:
         output = json.loads(formatter.format(record))
 
         assert output["message"] == "hello world"
+
+    def test_includes_security_fields_with_utc_timestamp(
+        self, formatter: JsonFormatter
+    ) -> None:
+        """Structured security fields are preserved and timestamp is UTC ISO 8601."""
+        record = _make_record(
+            "authentication succeeded",
+            request_id="req-123",
+            event_type="AUTHENTICATION_SUCCESS",
+            user_identifier="DOMAIN\\user",
+            source_ip="203.0.113.10",
+            user_agent="pytest-agent",
+            action_attempted="authenticate REMOTE_USER",
+            result="success",
+            resource_accessed="/api/user/",
+            status_code=200,
+            duration_ms=12.3,
+        )
+        output = json.loads(formatter.format(record))
+
+        parsed_timestamp = datetime.fromisoformat(
+            output["timestamp"].replace("Z", "+00:00")
+        )
+
+        assert parsed_timestamp.tzinfo == timezone.utc
+        assert output["event_type"] == "AUTHENTICATION_SUCCESS"
+        assert output["user_identifier"] == "DOMAIN\\user"
+        assert output["source_ip"] == "203.0.113.10"
+        assert output["user_agent"] == "pytest-agent"
+        assert output["action_attempted"] == "authenticate REMOTE_USER"
+        assert output["result"] == "success"
+        assert output["resource_accessed"] == "/api/user/"
+        assert output["status_code"] == 200
+        assert output["duration_ms"] == 12.3
+
+    def test_format_time_honors_custom_datefmt(self, formatter: JsonFormatter) -> None:
+        """Custom date formats use the UTC timestamp branch."""
+        record = _make_record("msg")
+        formatted = formatter.formatTime(record, "%Y-%m-%d")
+
+        assert formatted == datetime.fromtimestamp(
+            record.created, tz=timezone.utc
+        ).strftime("%Y-%m-%d")

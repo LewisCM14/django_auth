@@ -347,10 +347,12 @@ backend/
 │   │   ├── authentication.py
 │   │   ├── authorization.py
 │   │   ├── enforcement.py
-│   │   └── request_id.py
+│   │   ├── request_id.py
+│   │   └── content_security_policy.py
 │   ├── models.py
 │   ├── permissions.py
 │   ├── request_user.py
+│   ├── security_logging.py
 │   ├── serializers/
 │   │   ├── __init__.py
 │   │   ├── health_serializer.py
@@ -359,6 +361,7 @@ backend/
 │   │   └── __init__.py
 │   ├── throttling.py
 │   ├── urls.py
+│   ├── validation.py
 │   ├── views/
 │   │   ├── __init__.py
 │   │   ├── base.py
@@ -397,6 +400,8 @@ backend/
 │   │   ├── test_caching.py
 │   │   ├── test_exceptions.py
 │   │   ├── test_permissions.py
+│   │   ├── test_security_logging.py
+│   │   ├── test_validation.py
 │   │   ├── test_view_base_class.py
 │   │   ├── test_throttling.py
 │   │   └── test_view_decorator_order.py
@@ -421,6 +426,7 @@ backend/
 | `api/apps.py`                       | API                  | Django app config with startup security guard (validates AUTH_MODE and DEBUG settings) |
 | `api/cache_keys.py`                 | Cross-cutting        | Shared cache key builders and guardrails for adapter, service, and view caches |
 | `api/constants.py`                  | Cross-cutting        | Role definitions (ROLE_ADMIN, ROLE_VIEWER), AD group-to-role mapping |
+| `api/validation.py`                 | Cross-cutting        | Strict allowlist validation for hosts, origins, LDAP URIs/DNs, usernames, API versions, log formats, and log levels |
 | `api/exceptions.py`                 | Cross-cutting        | Custom DRF exception handler — standardises all error responses and logs exceptions with request-ID correlation |
 | `api/models.py`                     | Persistence          | ORM models |
 | `api/middleware/`                   | API/Cross-cutting    | Middleware package (see below) |
@@ -428,8 +434,9 @@ backend/
 | `api/middleware/authentication.py`  | API                  | Resolves `REMOTE_USER` into a Django `User` in IIS mode and injects a mock identity in dev mode; attaches `AnonymousUser` when unauthenticated and preserves `_cached_user` for DRF wrappers |
 | `api/middleware/enforcement.py`    | API/Cross-cutting    | Decorator enforcement — ensures every view declares `@throttle`/`@cache_*`/`@authz_*` decorators |
 | `api/middleware/authorization.py`   | API                  | LDAP group membership lookup, role mapping, and access control |
+| `api/middleware/content_security_policy.py` | Cross-cutting | Response middleware that injects the strict Content-Security-Policy header |
 | `api/urls.py`                       | API                  | URL routing to views package |
-| `api/views/`                        | API                  | DRF `APIView` request handling, input validation, response shaping, and schema metadata |
+| `api/views/`                        | API                  | DRF `APIView` request handling, response shaping, and schema metadata |
 | `api/views/base.py`                 | API                  | Thin shared `BaseAPIView` for common request-user helpers and base view structure |
 | `api/views/health.py`               | API                  | Health check `APIView` with explicit response serializer metadata |
 | `api/views/docs.py`                 | API                  | Wrapper views for schema/docs endpoints with explicit auth policy and shared base inheritance |
@@ -437,6 +444,7 @@ backend/
 | `api/permissions.py`                | API/Cross-cutting    | Per-view authorization permission decorators (`@authz_public`, `@authz_authenticated`, `@authz_roles`) |
 | `api/caching.py`                    | Cross-cutting        | `@cache_public`, `@cache_private`, `@cache_disabled` decorators — per-view HTTP cache-control policy with enforcement via middleware |
 | `api/throttling.py`                 | Cross-cutting        | `@throttle` and `@throttle_exempt` decorators — per-view, per-user rate limiting with explicit rate strings; `RemoteUserRateThrottle` keyed on `REMOTE_USER` identity |
+| `api/security_logging.py`           | Cross-cutting        | Structured security event field builders for authentication, authorization, validation, throttling, access, and exception logs |
 | `api/serializers/`                  | API                  | Serializer package and export surface |
 | `api/serializers/health_serializer.py` | API               | Health endpoint response serializer (`HealthSerializer`) |
 | `api/serializers/user_serializer.py`| API                  | User identity/roles response serializer (`UserSerializer`) |
@@ -445,12 +453,14 @@ backend/
 | `api/adapters/`                     | Source Adapter       | External data-source access with resilience patterns |
 | `api/migrations/`                   | Persistence          | Django migration history |
 | `config/`                           | Cross-cutting        | Django and app configuration (settings, WSGI, logging, etc.) |
-| `config/logging.py`                 | Cross-cutting        | `JsonFormatter` — custom `logging.Formatter` subclass for structured JSON output |
+| `config/logging.py`                 | Cross-cutting        | `JsonFormatter` — custom `logging.Formatter` subclass for UTC JSON output and structured security fields |
 | `config/pytest_settings.py`         | Cross-cutting        | Test-only settings bootstrap that loads `.env.example` before importing base settings |
 | `tests/`                            | Cross-cutting        | Automated test suite (`pytest`) mirroring source structure |
 | `tests/conftest.py`                 | Cross-cutting        | Shared pytest fixtures and test configuration |
 | `tests/api/`                        | API/Cross-cutting    | API-layer unit and integration tests, including schema and decorator guardrails |
 | `tests/api/test_view_base_class.py` | API/Cross-cutting    | Guardrail tests for shared `BaseAPIView` inheritance and serializer metadata |
+| `tests/api/test_security_logging.py` | Cross-cutting        | Structured security logging helper tests |
+| `tests/api/test_validation.py`      | Cross-cutting        | Validation helper tests for allowlists and fail-fast config |
 | `tests/api/middleware/`             | API/Cross-cutting    | Middleware tests (authentication, authorization, enforcement, request-id) |
 | `tests/api/views/`                  | API                  | Endpoint behavior tests (`health`, `schema/docs`, `user`) |
 | `tests/config/`                     | Cross-cutting        | Config/module tests (`settings`, `wsgi`, `logging`) |
@@ -546,9 +556,9 @@ Implementation note: this endpoint is implemented as a DRF `APIView` and declare
 
 **API Documentation** (`GET /api/docs/`)
 - Serves the interactive Swagger UI for exploring and testing endpoints.
-- Uses bundled `drf-spectacular-sidecar` assets so the page works without CDN access.
+- Uses bundled `drf-spectacular-sidecar` assets plus a local template/static override so the page works without CDN access or inline assets, keeping the CSP strict.
 - Requires IIS authentication (any domain user) but no specific application role.
-- Implemented via `api/views/docs.py` wrapper view marked `@authz_authenticated`.
+- Implemented via `api/views/docs.py` wrapper view built on `SpectacularSwaggerSplitView` and marked `@authz_authenticated`.
 
 *Response* `401 Unauthorized` — No `REMOTE_USER` header present.
 ```json
@@ -568,8 +578,8 @@ Implementation note: this endpoint is implemented as a DRF `APIView` and declare
 
 1. **Request-ID correlation** — Every log record automatically includes the `X-Request-ID` generated by `RequestIdMiddleware`. This allows ops teams to trace a single user request across all log lines, middleware layers, adapter calls, and background tasks.
 2. **Structured JSON in production** — Production logs are emitted as single-line JSON objects for consistent, machine-parseable output. This simplifies `grep`/`findstr` filtering, integration with Windows Event Forwarding, and future adoption of log aggregation tooling. Development mode uses human-readable console output.
-3. **Per-request access log** — Every HTTP request/response pair is logged once with method, path, status code, duration (ms), user identity, and request-ID. This replaces the need for IIS access logs at the Django layer and provides richer context (e.g., resolved username, authorization policy).
-4. **Security audit trail** — Authorization denials (401, 403) are logged at `WARNING` level with the username (if available), requested path, and denial reason. This satisfies enterprise security audit requirements.
+3. **Per-request access log** — Every HTTP request/response pair is logged once with method, path, status code, duration (ms), user identity, source IP, user agent, and request-ID. This replaces the need for IIS access logs at the Django layer and provides richer context for operations and incident triage.
+4. **Security audit trail** — Authentication failures, authorization denials, validation failures, rate-limit denials, and unhandled exceptions emit typed security events via `api.security_logging.py` with structured fields (user, IP, user agent, resource, status code, duration where applicable).
 5. **No sensitive data in logs** — Request bodies, passwords, tokens, and PII beyond the username should never be logged. The `REMOTE_USER` header value (corporate username) is the only identity field included.
 
 ```mermaid
@@ -592,13 +602,13 @@ Logging is configured via Django's `LOGGING` dict in `config/settings.py`, using
 
 | Component | Dev mode (`AUTH_MODE=dev`) | Production (`AUTH_MODE=iis`) |
 |-----------|---------------------------|------------------------------|
-| Format | Human-readable: `[level] request_id message` | JSON: `{"timestamp", "level", "request_id", "logger", "message"}` |
+| Format | Human-readable: `[level] request_id message` | JSON: `{"timestamp" (UTC ISO 8601), "level", "request_id", "logger", "message", security fields}` |
 | Handler | Console (`StreamHandler` to stderr) | Console (`StreamHandler` to stderr, captured by IIS/wfastcgi) |
 | Root level | `DEBUG` | `WARNING` |
 | `api` logger level | `DEBUG` | `INFO` |
 | `django` logger level | `INFO` | `WARNING` |
 
-The JSON formatter is a lightweight custom `logging.Formatter` subclass in `config/logging.py` (no external dependencies). It reads `request_id` from the log record's extras, defaulting to `"-"` when no request context is available (e.g., startup, management commands). Keeping it separate from `settings.py` allows it to be instantiated and tested in isolation without triggering settings validation.
+The JSON formatter is a lightweight custom `logging.Formatter` subclass in `config/logging.py` (no external dependencies). It emits UTC ISO 8601 timestamps and propagates the structured fields defined in `api.security_logging.SECURITY_EXTRA_FIELDS`, defaulting `request_id` to `"-"` when no request context is available (e.g., startup, management commands). Keeping it separate from `settings.py` allows it to be instantiated and tested in isolation without triggering settings validation.
 
 #### Request-ID Threading
 
@@ -608,13 +618,28 @@ The `RequestIdMiddleware` already generates `X-Request-ID` and attaches it to `r
 - A **logging filter** (`api/middleware/request_id.py::RequestIdFilter`) reads the context variable and injects `request_id` into every log record.
 - The filter is attached to all handlers in the `LOGGING` config, so every log line — from middleware, views, services, adapters, or Django internals — automatically carries the correlation ID.
 
+#### Security Event Types
+
+| Event Type | Emitted By | When | Core Fields |
+|------------|------------|------|-------------|
+| `ACCESS` | `RequestIdMiddleware` | Every request/response pair | method, path, status code, duration, user, source IP, user agent |
+| `AUTHENTICATION_SUCCESS` | `AuthenticationMiddleware` | Valid `REMOTE_USER` or `DEV_USER_IDENTITY` resolved | user, source IP, user agent |
+| `AUTHENTICATION_FAILURE` | `AuthorizationMiddleware` | Request lacks identity | user (anonymous), requested resource, status code |
+| `AUTHORIZATION_FAILURE` | `AuthorizationMiddleware` | Authenticated user lacks required role | user, requested resource, status code |
+| `INPUT_VALIDATION_FAILURE` | `AuthenticationMiddleware`, `api.exceptions` | Invalid username, origin, LDAP value, or serializer validation error | request ID, user, resource, status code |
+| `RATE_LIMIT_TRIGGERED` | `api.throttling` | `429 Too Many Requests` emitted | user, requested resource, status code |
+| `UNHANDLED_EXCEPTION` | `api.exceptions`, `AuthorizationMiddleware` | Unhandled exception escapes the view or middleware boundary | exception type, request ID, status code |
+
 #### Where Logging Happens
 
 | Layer | What is logged | Level |
 |-------|---------------|-------|
-| `RequestIdMiddleware` | Request received (method, path, user) and response completed (status, duration ms) | `INFO` |
-| `AuthorizationMiddleware` | Access denied: 401 (no identity) or 403 (insufficient roles) with username, path, and policy | `WARNING` |
-| `api/exceptions.py` | Unhandled exceptions caught by the DRF exception handler (full traceback) | `ERROR` |
+| `RequestIdMiddleware` | Request received/completed with method, path, status, duration, user, source IP, and user agent | `INFO` |
+| `AuthenticationMiddleware` | Authentication success, invalid identity validation failures | `INFO` / `WARNING` |
+| `AuthorizationMiddleware` | Authentication failures, authorization denials, and unhandled authz exceptions | `WARNING` / `ERROR` |
+| `api/exceptions.py` | Validation failures and unhandled exceptions caught by the DRF exception handler | `WARNING` / `ERROR` |
+| `api/security_logging.py` | Structured security event field assembly and normalization for downstream loggers | `N/A` |
+| `config/logging.py` | UTC ISO 8601 JSON formatting and security field propagation | `N/A` |
 | Service Layer | Business logic warnings, validation failures | `WARNING` |
 | Adapter Layer | External call start, response status, retry attempts, failures | `INFO` / `WARNING` / `ERROR` |
 
@@ -686,6 +711,7 @@ The hierarchical logger name (`api.adapters.erp`) inherits the `api` logger's le
 2. **Request-ID in every error response** — The `request_id` field lets frontend teams and support staff quote a correlation ID in bug reports. Ops can then search logs for that exact request.
 3. **No internal details leaked** — Stack traces, database errors, and adapter exception messages are logged server-side at `ERROR` level but never included in the response body. The client receives only a safe, generic message for 5xx errors.
 4. **DRF integration** — Wired as the custom `EXCEPTION_HANDLER` in `REST_FRAMEWORK` settings. Catches all exceptions raised within DRF views (including serializer validation errors) and exceptions re-raised by middleware.
+5. **Structured security logging** — Validation failures, authentication failures, authorization denials, rate-limit denials, and unhandled exceptions emit typed security events through `api.security_logging.py` so operators can search by event name and request-ID without parsing free-form messages.
 
 ```mermaid
 ---
@@ -751,7 +777,7 @@ REST_FRAMEWORK = {
 
 #### Middleware Exception Handling
 
-The authorization middleware catches `AuthenticationFailed` and `PermissionDenied` in its own `try/except` and returns `JsonResponse` directly. The middleware runs *before* DRF's view layer, so the DRF exception handler does not apply there. Both paths (middleware and DRF handler) produce the same error envelope shape, including `request_id`.
+The authorization middleware catches `AuthenticationFailed` and `PermissionDenied` in its own `try/except` and returns `JsonResponse` directly. The middleware runs *before* DRF's view layer, so the DRF exception handler does not apply there. Those middleware paths emit `AUTHENTICATION_FAILURE` and `AUTHORIZATION_FAILURE` security events with request metadata. The DRF exception handler covers serializer validation errors and unhandled exceptions, which are logged as `INPUT_VALIDATION_FAILURE` and `UNHANDLED_EXCEPTION` respectively. Both paths produce the same error envelope shape, including `request_id`.
 
 ```mermaid
 ---
@@ -1018,13 +1044,14 @@ The `detail` and `request_id` fields match the standard error envelope. The `Ret
     - `pytest-django`
     - `pytest-mock`
     - `responses` or `respx` for external API mocking (use in CI pipelines for integration tests)
-    - `pytest-cov` for coverage reporting, targeting 100% unit test coverage
-    - `mypy` with `django-stubs` and `djangorestframework-stubs` for static type checking; configured via `mypy.ini`
+    - `pytest-cov` for coverage reporting, maintaining 100% coverage on tracked backend source files
+    - `mypy` with `django-stubs` and `djangorestframework-stubs` for static type checking; configured via `mypy.ini` and kept at zero reported errors
 
 1. Test Organization
     - The `tests/` directory lives at the root of the backend and mirrors the source code folder structure (for example `tests/api/` covers `api/`, `tests/config/` covers `config/`).
     - Test files are named `test_<module>.py` to match the module they cover (for example `tests/api/test_views.py` covers `api/views.py`).
     - Tests within each file are grouped into classes named after the subject under test (for example `TestHealthView`).
+    - Cross-cutting helper coverage lives in `tests/api/test_validation.py`, `tests/api/test_security_logging.py`, and `tests/config/test_logging.py`.
     - `pytest.ini` sets `testpaths = tests` so discovery is explicit and scoped.
 
 1. Authentication & Authorization Testing
@@ -1119,6 +1146,8 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `CORS_ALLOWED_ORIGINS`   | No       | Comma-separated origins  | —           | Origins permitted for cross-origin requests. Omit if frontend is same-origin. |
 | `SECRET_KEY`             | Yes      | String                   | —           | Django secret key. Must be unique and unpredictable in production. |
 
+All configuration inputs are validated at import time in `api.validation.py`. The checks are exact allowlists: hosts must be localhost/IP/hostname values, CORS origins must be absolute `http`/`https` origins without paths or userinfo, LDAP URIs must be `ldap://` or `ldaps://` URIs with valid hosts, LDAP base DNs must be comma-separated `attr=value` pairs, usernames must match the approved pattern, and log formats/levels are restricted to the documented values.
+
 
 ## Deployment
 
@@ -1152,7 +1181,11 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     LOG_FORMAT=json
     ```
 
-    Optionally set `CORS_ALLOWED_ORIGINS` if the frontend is served from a different origin.
+    Optionally set `CORS_ALLOWED_ORIGINS` if the frontend is served from a different origin. The backend enables credentialed CORS and rejects malformed origin values, so only absolute `http` or `https` origins without paths are accepted.
+
+    `ALLOWED_HOSTS` is required in IIS mode; the application fails fast at startup if it is omitted.
+
+    LDAP and identity values are also strict allowlists: `LDAP_SERVER_URI` must be an `ldap://` or `ldaps://` URI, `LDAP_BASE_DN` must be a comma-separated DN, and `REMOTE_USER` / `DEV_USER_IDENTITY` values must match the approved username pattern.
 
     **Sanity check:** Run `python -c "from dotenv import load_dotenv; load_dotenv(); import os; print(os.getenv('AUTH_MODE'))"` and confirm it prints `iis`. Verify `DEBUG` is `False` — the application will refuse to start if `AUTH_MODE=dev` with `DEBUG=False`, confirming the safety guard works.
 
@@ -1265,9 +1298,12 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 1. **Configure HTTPS & TLS**
 
     Bind a valid TLS certificate to the IIS site. If using an internal CA, ensure the certificate is trusted by client browsers.
+    Configure IIS to forward the original scheme to Django as `X-Forwarded-Proto: https` so `SecurityMiddleware` can correctly mark requests as secure and emit HSTS.
 
     - In IIS Manager, select the site → **Bindings** → Edit the HTTPS binding → Select the certificate.
     - Remove any HTTP bindings (or add a redirect rule from HTTP → HTTPS).
+
+    Django also emits production security headers and cookie flags in IIS mode, including `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, a strict `Content-Security-Policy`, and secure `Session` / `CSRF` cookie settings.
 
     **Sanity check:** Browse to the site URL via HTTPS and confirm the browser shows a valid certificate (no warnings). Attempt to browse via HTTP and confirm it is either refused or redirected to HTTPS.
 

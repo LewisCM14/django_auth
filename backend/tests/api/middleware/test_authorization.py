@@ -13,7 +13,7 @@ Role resolution happens only when a view requires roles:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -178,17 +178,28 @@ class TestAuthorizationMiddlewareIISMode:
         assert ROLE_VIEWER in request.user.roles
 
     @override_settings(DEBUG=False)
-    def test_user_with_no_matching_groups_returns_403(self) -> None:
+    def test_user_with_no_matching_groups_returns_403(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """User authenticated but not in any configured AD group gets 403 JSON."""
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = Mock(username="DOMAIN\\regular_user")
+        request.path = "/api/admin/"
+        request.META = {
+            "REMOTE_ADDR": "203.0.113.9",
+            "HTTP_USER_AGENT": "pytest-agent",
+        }
         view_func = _make_roles_view()
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = ["CN=other-group,OU=Groups,DC=corp,DC=local"]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-                result = middleware.process_view(request, view_func, [], {})
+                with caplog.at_level(
+                    logging.WARNING, logger="api.middleware.authorization"
+                ):
+                    result = middleware.process_view(request, view_func, [], {})
 
         assert result is not None
         assert result.status_code == 403
@@ -197,19 +208,50 @@ class TestAuthorizationMiddlewareIISMode:
         body = json.loads(result.content)
         assert body["detail"] == "You do not have permission to perform this action."
 
+        record = cast(
+            Any,
+            next(r for r in caplog.records if r.name == "api.middleware.authorization"),
+        )
+        assert record.event_type == "AUTHORIZATION_FAILURE"
+        assert record.user_identifier == "DOMAIN\\regular_user"
+        assert record.action_attempted == "authorize request"
+        assert record.result == "failure"
+        assert record.status_code == 403
+
     @override_settings(DEBUG=False)
-    def test_unauthenticated_request_returns_401(self) -> None:
+    def test_unauthenticated_request_returns_401(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Request without user identity returns 401 JSON response."""
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
         middleware = AuthorizationMiddleware(self.get_response)
         request = Mock()
         request.user = None
+        request.path = "/api/user/"
+        request.META = {
+            "REMOTE_ADDR": "203.0.113.11",
+            "HTTP_USER_AGENT": "pytest-agent",
+        }
         view_func = _make_roles_view()
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-            result = middleware.process_view(request, view_func, [], {})
+            with caplog.at_level(
+                logging.WARNING, logger="api.middleware.authorization"
+            ):
+                result = middleware.process_view(request, view_func, [], {})
 
         assert result is not None
         assert result.status_code == 401
+
+        record = cast(
+            Any,
+            next(r for r in caplog.records if r.name == "api.middleware.authorization"),
+        )
+        assert record.event_type == "AUTHENTICATION_FAILURE"
+        assert record.user_identifier == "anonymous"
+        assert record.action_attempted == "authenticate request"
+        assert record.result == "failure"
+        assert record.status_code == 401
 
     @override_settings(DEBUG=False)
     def test_ldap_queried_on_every_request(self) -> None:
@@ -664,11 +706,17 @@ class TestAuthorizationMiddlewareAuditLogging:
         assert result is not None
         assert result.status_code == 401
         records = [
-            r for r in caplog.records if r.name == "api.middleware.authorization"
+            cast(Any, r)
+            for r in caplog.records
+            if r.name == "api.middleware.authorization"
         ]
         assert len(records) == 1
         assert records[0].levelno == logging.WARNING
-        assert "/api/user/" in records[0].getMessage()
+        assert records[0].event_type == "AUTHENTICATION_FAILURE"
+        assert records[0].action_attempted == "authenticate request"
+        assert records[0].result == "failure"
+        assert records[0].status_code == 401
+        assert records[0].resource_accessed == "/api/user/"
 
     @override_settings(DEBUG=False)
     def test_403_response_logs_warning_with_username(
@@ -691,13 +739,18 @@ class TestAuthorizationMiddlewareAuditLogging:
         assert result is not None
         assert result.status_code == 403
         records = [
-            r for r in caplog.records if r.name == "api.middleware.authorization"
+            cast(Any, r)
+            for r in caplog.records
+            if r.name == "api.middleware.authorization"
         ]
         assert len(records) == 1
         assert records[0].levelno == logging.WARNING
-        msg = records[0].getMessage()
-        assert "DOMAIN\\denied_user" in msg
-        assert "/api/user/" in msg
+        assert records[0].event_type == "AUTHORIZATION_FAILURE"
+        assert records[0].user_identifier == "DOMAIN\\denied_user"
+        assert records[0].action_attempted == "authorize request"
+        assert records[0].result == "failure"
+        assert records[0].status_code == 403
+        assert records[0].resource_accessed == "/api/user/"
 
     @override_settings(DEBUG=False)
     def test_500_response_logs_error(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -718,7 +771,9 @@ class TestAuthorizationMiddlewareAuditLogging:
         assert result is not None
         assert result.status_code == 500
         records = [
-            r for r in caplog.records if r.name == "api.middleware.authorization"
+            cast(Any, r)
+            for r in caplog.records
+            if r.name == "api.middleware.authorization"
         ]
         assert len(records) == 1
         assert records[0].levelno == logging.ERROR

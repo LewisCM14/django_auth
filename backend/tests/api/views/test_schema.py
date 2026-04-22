@@ -23,6 +23,9 @@ class TestSchemaEndpoints:
         """GET /api/schema/ returns an OpenAPI JSON payload."""
         response = admin_client.get("/api/schema/")
         assert response.status_code == 200
+        assert "default-src 'none'" in response.headers.get(
+            "Content-Security-Policy", ""
+        )
         content_type = response["Content-Type"]
         assert (
             "application/vnd.oai.openapi+json" in content_type
@@ -50,6 +53,9 @@ class TestSchemaEndpoints:
         response = admin_client.get("/api/docs/")
         assert response.status_code == 200
         assert "text/html" in response["Content-Type"]
+        assert "default-src 'none'" in response.headers.get(
+            "Content-Security-Policy", ""
+        )
 
     @pytest.mark.django_db
     def test_docs_uses_local_sidecar_assets(self, admin_client: Client) -> None:
@@ -58,6 +64,8 @@ class TestSchemaEndpoints:
         assert response.status_code == 200
         assert b"cdn.jsdelivr.net" not in response.content
         assert b"drf_spectacular_sidecar" in response.content
+        assert b"SwaggerUIBundle(" not in response.content
+        assert b"<style>" not in response.content
 
     def test_schema_rejects_unauthenticated(
         self, unauthenticated_client: Client

@@ -12,6 +12,7 @@ enforcement middleware enforces this.
 from __future__ import annotations
 
 import math
+import logging
 from functools import wraps
 from typing import Any, Callable, cast
 
@@ -22,6 +23,9 @@ from rest_framework.request import Request
 from rest_framework.throttling import SimpleRateThrottle
 
 from api.middleware.request_id import request_id_var
+from api.security_logging import build_security_event_fields
+
+logger = logging.getLogger(__name__)
 
 THROTTLE_RATE_ATTR = "_throttle_rate"
 
@@ -161,6 +165,16 @@ def _throttle_class(cls: type[View], rate: str) -> type[View]:
             wait_seconds = _throttle_wait_seconds(throttle_instance)
             detail = _throttle_detail(wait_seconds)
             request_id = getattr(request, "request_id", request_id_var.get())
+            logger.warning(
+                "rate limit exceeded",
+                extra=build_security_event_fields(
+                    request,
+                    event_type="RATE_LIMIT_TRIGGERED",
+                    action_attempted=getattr(request, "method", "request"),
+                    result="failure",
+                    status_code=429,
+                ),
+            )
             response = JsonResponse(
                 {"detail": detail, "request_id": request_id},
                 status=429,
@@ -197,6 +211,16 @@ def _throttle_callable(func: Callable[..., Any], rate: str) -> Callable[..., Any
             wait_seconds = _throttle_wait_seconds(throttle_instance)
             detail = _throttle_detail(wait_seconds)
             request_id = getattr(request, "request_id", request_id_var.get())
+            logger.warning(
+                "rate limit exceeded",
+                extra=build_security_event_fields(
+                    request,
+                    event_type="RATE_LIMIT_TRIGGERED",
+                    action_attempted=getattr(request, "method", "request"),
+                    result="failure",
+                    status_code=429,
+                ),
+            )
             response = JsonResponse(
                 {"detail": detail, "request_id": request_id},
                 status=429,

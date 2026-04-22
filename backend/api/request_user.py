@@ -16,7 +16,8 @@ def get_request_user(request: Any) -> Any:
     """
 
     underlying_request = getattr(request, "_request", request)
-    cached_user = getattr(underlying_request, "_cached_user", None)
+    request_dict = getattr(underlying_request, "__dict__", {})
+    cached_user = request_dict.get("_cached_user")
     if cached_user is not None:
         return cached_user
-    return getattr(underlying_request, "user", None)
+    return request_dict.get("user")

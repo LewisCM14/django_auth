@@ -16,6 +16,7 @@ from django.http import HttpRequest, HttpResponse
 from django.utils.deprecation import MiddlewareMixin
 
 from api.request_user import get_request_user
+from api.security_logging import build_security_event_fields
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,8 @@ class RequestIdFilter(logging.Filter):
         Returns:
             Always True — this filter never suppresses records.
         """
-        record.request_id = request_id_var.get()
+        if not getattr(record, "request_id", None):
+            record.request_id = request_id_var.get()
         return True
 
 
@@ -98,13 +100,26 @@ class RequestIdMiddleware(MiddlewareMixin):
         username: str = (
             user.get_username() if user and user.is_authenticated else "anonymous"
         )
+        method = getattr(request, "method", "-")
+        path = getattr(request, "path", "-")
         logger.info(
             "%s %s %s %.1fms %s",
-            request.method,
-            request.path,
+            method,
+            path,
             response.status_code,
             duration_ms,
             username,
+            extra=build_security_event_fields(
+                request,
+                event_type="ACCESS",
+                action_attempted=method,
+                result="success" if response.status_code < 400 else "failure",
+                resource_accessed=path,
+                user_identifier=username,
+                request_id=request_id,
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+            ),
         )
         # Reset context variable so the "-" default applies cleanly to any
         # work that runs after this response (e.g. background tasks, signals).

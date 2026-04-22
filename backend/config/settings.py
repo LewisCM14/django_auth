@@ -14,6 +14,16 @@ from typing import Any, Final
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
+from api.validation import (
+    validate_allowed_hosts,
+    validate_api_version,
+    validate_cors_allowed_origins,
+    validate_ldap_base_dn,
+    validate_ldap_server_uri,
+    validate_log_format,
+    validate_log_level,
+)
+
 
 BASE_DIR: Final[Path] = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -29,9 +39,9 @@ if not SECRET_KEY:
 DEBUG: bool = os.getenv("DEBUG", "False").strip().lower() == "true"
 
 ALLOWED_HOSTS_RAW: str = os.getenv("ALLOWED_HOSTS", "")
-ALLOWED_HOSTS: list[str] = [
-    host.strip() for host in ALLOWED_HOSTS_RAW.split(",") if host.strip()
-]
+ALLOWED_HOSTS: list[str] = validate_allowed_hosts(ALLOWED_HOSTS_RAW)
+if AUTH_MODE == "iis" and not ALLOWED_HOSTS:
+    raise ImproperlyConfigured("ALLOWED_HOSTS is required when AUTH_MODE='iis'.")
 if not ALLOWED_HOSTS:
     ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
@@ -55,6 +65,7 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "api.middleware.request_id.RequestIdMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "api.middleware.content_security_policy.ContentSecurityPolicyMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "api.middleware.authentication.AuthenticationMiddleware",
@@ -69,7 +80,7 @@ ROOT_URLCONF = "config.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "api" / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -102,25 +113,63 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS_RAW: str = os.getenv("CORS_ALLOWED_ORIGINS", "")
-CORS_ALLOWED_ORIGINS: list[str] = [
-    origin.strip() for origin in CORS_ALLOWED_ORIGINS_RAW.split(",") if origin.strip()
-]
-# Local development can allow all origins; non-dev environments must opt in explicitly.
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOWED_ORIGINS: list[str] = validate_cors_allowed_origins(
+    CORS_ALLOWED_ORIGINS_RAW
+)
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_CREDENTIALS = True
 
 # Release version surfaced by /api/health/ and OpenAPI docs.
 # Tagged-release overwrite this placeholder in .env.
-API_VERSION: str = os.getenv("API_VERSION", "APP_VERSION").strip() or "APP_VERSION"
+API_VERSION: str = validate_api_version(
+    os.getenv("API_VERSION", "APP_VERSION").strip() or "APP_VERSION"
+)
 
 # LDAP settings are required for IIS mode; optional for dev mode.
 # In IIS mode, query_ldap_groups uses these to look up user group membership.
-LDAP_SERVER_URI: str = os.getenv("LDAP_SERVER_URI", "").strip()
-LDAP_BASE_DN: str = os.getenv("LDAP_BASE_DN", "").strip()
+LDAP_SERVER_URI_RAW: str = os.getenv("LDAP_SERVER_URI", "").strip()
+LDAP_BASE_DN_RAW: str = os.getenv("LDAP_BASE_DN", "").strip()
+
+LDAP_SERVER_URI: str = (
+    validate_ldap_server_uri(LDAP_SERVER_URI_RAW) if LDAP_SERVER_URI_RAW else ""
+)
+LDAP_BASE_DN: str = validate_ldap_base_dn(LDAP_BASE_DN_RAW) if LDAP_BASE_DN_RAW else ""
 
 if AUTH_MODE == "iis" and (not LDAP_SERVER_URI or not LDAP_BASE_DN):
     raise ImproperlyConfigured(
         "LDAP_SERVER_URI and LDAP_BASE_DN are required when AUTH_MODE='iis'."
     )
+
+# Security headers and cookie flags are explicit so production deployments
+# remain hardened even if the hosting layer omits defaults.
+SECURE_PROXY_SSL_HEADER: tuple[str, str] | None = (
+    ("HTTP_X_FORWARDED_PROTO", "https") if AUTH_MODE == "iis" else None
+)
+SECURE_SSL_REDIRECT: bool = False
+SECURE_HSTS_SECONDS: int = 31536000 if AUTH_MODE == "iis" else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS: bool = AUTH_MODE == "iis"
+SECURE_HSTS_PRELOAD: bool = False
+SECURE_CONTENT_TYPE_NOSNIFF: bool = True
+SECURE_REFERRER_POLICY: str = "same-origin"
+X_FRAME_OPTIONS: str = "DENY"
+SESSION_COOKIE_SECURE: bool = AUTH_MODE == "iis"
+SESSION_COOKIE_HTTPONLY: bool = True
+SESSION_COOKIE_SAMESITE: str = "Lax"
+CSRF_COOKIE_SECURE: bool = AUTH_MODE == "iis"
+CSRF_COOKIE_HTTPONLY: bool = True
+CSRF_COOKIE_SAMESITE: str = "Lax"
+CONTENT_SECURITY_POLICY: str = (
+    "default-src 'none'; "
+    "base-uri 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'none'; "
+    "connect-src 'self'; "
+    "img-src 'self' data:; "
+    "font-src 'self' data:; "
+    "script-src 'self'; "
+    "style-src 'self'"
+)
 
 # DRF is configured as a thin transport layer. Authentication/authorization are
 # enforced in middleware so every endpoint follows the same project-specific policy.
@@ -158,9 +207,9 @@ CACHES = {
     }
 }
 
-LOG_FORMAT: str = os.getenv("LOG_FORMAT", "text").strip().lower()
-LOG_LEVEL: str = (
-    os.getenv("LOG_LEVEL", "DEBUG" if AUTH_MODE == "dev" else "WARNING").strip().upper()
+LOG_FORMAT: str = validate_log_format(os.getenv("LOG_FORMAT", "text"))
+LOG_LEVEL: str = validate_log_level(
+    os.getenv("LOG_LEVEL", "DEBUG" if AUTH_MODE == "dev" else "WARNING")
 )
 
 

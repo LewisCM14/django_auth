@@ -7,8 +7,11 @@ instantiated, and tested in isolation without triggering settings validation
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
+
+from api.security_logging import SECURITY_EXTRA_FIELDS
 
 
 class JsonFormatter(logging.Formatter):
@@ -21,12 +24,23 @@ class JsonFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        return json.dumps(
-            {
-                "timestamp": self.formatTime(record, self.datefmt),
-                "level": record.levelname,
-                "logger": record.name,
-                "request_id": getattr(record, "request_id", "-"),
-                "message": record.getMessage(),
-            }
-        )
+        payload: dict[str, object] = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "request_id": getattr(record, "request_id", "-"),
+            "message": record.getMessage(),
+        }
+
+        for field_name in SECURITY_EXTRA_FIELDS:
+            value = getattr(record, field_name, None)
+            if value is not None:
+                payload[field_name] = value
+
+        return json.dumps(payload)
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc)
+        if datefmt is not None:
+            return timestamp.strftime(datefmt)
+        return timestamp.isoformat().replace("+00:00", "Z")

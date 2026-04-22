@@ -10,6 +10,8 @@ from typing import Final
 
 from django.core.exceptions import ImproperlyConfigured
 
+from api.validation import validate_distinguished_name
+
 # Application roles
 ROLE_ADMIN: Final[str] = "app_admin"
 """Application administrator role with full access."""
@@ -32,8 +34,12 @@ def _required_env(name: str) -> str:
     return value
 
 
-ADMIN_AD_GROUP: Final[str] = _required_env("ADMIN_AD_GROUP")
-VIEWER_AD_GROUP: Final[str] = _required_env("VIEWER_AD_GROUP")
+ADMIN_AD_GROUP: Final[str] = validate_distinguished_name(
+    _required_env("ADMIN_AD_GROUP"), field_name="ADMIN_AD_GROUP"
+)
+VIEWER_AD_GROUP: Final[str] = validate_distinguished_name(
+    _required_env("VIEWER_AD_GROUP"), field_name="VIEWER_AD_GROUP"
+)
 
 if ADMIN_AD_GROUP == VIEWER_AD_GROUP:
     raise ImproperlyConfigured(

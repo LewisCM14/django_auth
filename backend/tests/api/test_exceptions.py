@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from django.test import RequestFactory
 from rest_framework.exceptions import (
     AuthenticationFailed,
     NotFound,
@@ -27,8 +29,13 @@ from api.middleware.request_id import request_id_var
 
 def _make_context(request_id: str = "test-req-id") -> dict:
     """Build a minimal DRF context dict with a mock request."""
-    request = MagicMock()
+    request: Any = RequestFactory().get(
+        "/api/test/",
+        REMOTE_ADDR="203.0.113.8",
+        HTTP_USER_AGENT="pytest-agent",
+    )
     request.request_id = request_id
+    request.user = None
     return {"request": request, "view": MagicMock(), "args": [], "kwargs": {}}
 
 
@@ -78,6 +85,29 @@ class TestApiExceptionHandlerDrfExceptions:
         assert "username" in data
         assert data["request_id"] == "val-req-id"
 
+    def test_validation_error_logs_input_validation_failure(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ValidationError emits a structured security log for input validation failures."""
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
+        context = _make_context("val-log-id")
+
+        with caplog.at_level(logging.WARNING, logger="api.exceptions"):
+            api_exception_handler(
+                ValidationError({"username": ["This field is required."]}), context
+            )
+
+        record = cast(
+            Any, next(r for r in caplog.records if r.name == "api.exceptions")
+        )
+        assert record.event_type == "INPUT_VALIDATION_FAILURE"
+        assert record.action_attempted == "validate request data"
+        assert record.result == "failure"
+        assert record.status_code == 400
+        assert record.request_id == "val-log-id"
+
 
 class TestApiExceptionHandlerUnhandled:
     """Handler catches unhandled exceptions, logs them, and returns safe 500."""
@@ -104,7 +134,11 @@ class TestApiExceptionHandlerUnhandled:
         with caplog.at_level(logging.ERROR, logger="api.exceptions"):
             api_exception_handler(RuntimeError("something went wrong"), context)
 
-        records = [r for r in caplog.records if r.name == "api.exceptions"]
+        records = [cast(Any, r) for r in caplog.records if r.name == "api.exceptions"]
         assert len(records) == 1
         assert records[0].levelno == logging.ERROR
         assert records[0].exc_info is not None
+        assert records[0].event_type == "UNHANDLED_EXCEPTION"
+        assert records[0].exception_type == "RuntimeError"
+        assert records[0].status_code == 500
+        assert records[0].request_id == "log-req-id"

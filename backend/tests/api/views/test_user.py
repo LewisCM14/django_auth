@@ -56,6 +56,9 @@ class TestUserView:
         cache_control = response.headers.get("Cache-Control", "")
         assert "private" in cache_control
         assert "no-cache" in cache_control
+        assert "default-src 'none'" in response.headers.get(
+            "Content-Security-Policy", ""
+        )
 
     def test_unauthenticated_returns_401(self, unauthenticated_client: Client) -> None:
         """Unauthenticated request is rejected with 401."""

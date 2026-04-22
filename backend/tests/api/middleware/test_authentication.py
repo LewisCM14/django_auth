@@ -23,11 +23,14 @@ About request.META:
 
 from __future__ import annotations
 
+import logging
+from typing import Any, cast
 from django.http import HttpRequest
 from unittest.mock import Mock, patch
 
 import pytest
 from django.contrib.auth.models import User
+from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from api.middleware.authentication import AuthenticationMiddleware
@@ -107,6 +110,20 @@ class TestAuthenticationMiddlewareDevMode:
         # User should be a real User instance (or have is_active, username, etc.)
         assert hasattr(request.user, "username")
         assert request.user.username == "dev_test_user"
+
+    @override_settings(DEBUG=True)
+    def test_dev_mode_rejects_invalid_identity(self) -> None:
+        """Invalid DEV_USER_IDENTITY values are rejected at request time."""
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.META = {}
+        request.user = None
+
+        with patch.dict(
+            "os.environ", {"AUTH_MODE": "dev", "DEV_USER_IDENTITY": "bad/identity"}
+        ):
+            with pytest.raises(ImproperlyConfigured, match="DEV_USER_IDENTITY"):
+                middleware.process_request(request)
 
 
 class TestAuthenticationMiddlewareIISMode:
@@ -208,3 +225,88 @@ class TestAuthenticationMiddlewareIISMode:
 
         # Should reuse the existing user (same ID)
         assert User.objects.filter(username=remote_user, pk=original_pk).exists()
+
+    @override_settings(DEBUG=False)
+    @pytest.mark.django_db
+    def test_iis_mode_rejects_invalid_remote_user(self) -> None:
+        """Invalid REMOTE_USER values are treated as anonymous."""
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.META = {"REMOTE_USER": "DOMAIN\\bad/user"}
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            middleware.process_request(request)
+
+        assert request.user is not None
+        assert not request.user.is_authenticated
+
+    @override_settings(DEBUG=False)
+    @pytest.mark.django_db
+    def test_iis_mode_logs_authentication_success(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Successful REMOTE_USER resolution emits a structured auth success log."""
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.path = "/api/user/"
+        request.META = {
+            "REMOTE_USER": "DOMAIN\\testuser",
+            "REMOTE_ADDR": "198.51.100.2",
+            "HTTP_USER_AGENT": "pytest-agent",
+        }
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            with caplog.at_level(logging.INFO, logger="api.middleware.authentication"):
+                middleware.process_request(request)
+
+        record = cast(
+            Any,
+            next(
+                r for r in caplog.records if r.name == "api.middleware.authentication"
+            ),
+        )
+        assert record.event_type == "AUTHENTICATION_SUCCESS"
+        assert record.user_identifier == "DOMAIN\\testuser"
+        assert record.action_attempted == "authenticate REMOTE_USER"
+        assert record.result == "success"
+        assert record.source_ip == "198.51.100.2"
+        assert record.user_agent == "pytest-agent"
+
+    @override_settings(DEBUG=False)
+    @pytest.mark.django_db
+    def test_iis_mode_logs_invalid_remote_user(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Invalid REMOTE_USER values emit a structured validation failure log."""
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.path = "/api/user/"
+        request.META = {
+            "REMOTE_USER": "DOMAIN\\bad/user",
+            "REMOTE_ADDR": "198.51.100.2",
+            "HTTP_USER_AGENT": "pytest-agent",
+        }
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            with caplog.at_level(
+                logging.WARNING, logger="api.middleware.authentication"
+            ):
+                middleware.process_request(request)
+
+        record = cast(
+            Any,
+            next(
+                r for r in caplog.records if r.name == "api.middleware.authentication"
+            ),
+        )
+        assert record.event_type == "INPUT_VALIDATION_FAILURE"
+        assert record.user_identifier == "anonymous"
+        assert record.action_attempted == "validate REMOTE_USER"
+        assert record.result == "failure"
+        assert record.source_ip == "198.51.100.2"
+        assert record.user_agent == "pytest-agent"

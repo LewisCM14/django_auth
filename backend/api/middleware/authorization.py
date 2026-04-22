@@ -36,6 +36,7 @@ from ldap3.utils.conv import escape_filter_chars
 
 from api.constants import AD_GROUP_TO_ROLE_MAP, ROLES
 from api.middleware.request_id import request_id_var
+from api.security_logging import build_security_event_fields
 from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
 
 logger = logging.getLogger(__name__)
@@ -127,9 +128,17 @@ class AuthorizationMiddleware:
                 return None
 
             raise ImproperlyConfigured(f"Unknown authz policy '{policy}'.")
-        except AuthenticationFailed as exc:
+        except AuthenticationFailed:
             logger.warning(
-                "authentication failed: %s %s — %s", request.method, request.path, exc
+                "authentication failed",
+                extra=build_security_event_fields(
+                    request,
+                    event_type="AUTHENTICATION_FAILURE",
+                    action_attempted="authenticate request",
+                    result="failure",
+                    user_identifier="anonymous",
+                    status_code=401,
+                ),
             )
             return JsonResponse(
                 {
@@ -138,14 +147,18 @@ class AuthorizationMiddleware:
                 },
                 status=401,
             )
-        except PermissionDenied as exc:
+        except PermissionDenied:
             username = getattr(request.user, "username", None) or "anonymous"
             logger.warning(
-                "permission denied: %s %s %s — %s",
-                username,
-                request.method,
-                request.path,
-                exc,
+                "authorization failed",
+                extra=build_security_event_fields(
+                    request,
+                    event_type="AUTHORIZATION_FAILURE",
+                    action_attempted="authorize request",
+                    result="failure",
+                    user_identifier=username,
+                    status_code=403,
+                ),
             )
             return JsonResponse(
                 {
@@ -156,9 +169,17 @@ class AuthorizationMiddleware:
             )
         except ImproperlyConfigured:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception(
-                "Unhandled exception (request_id=%s)", request_id_var.get()
+                "unhandled authorization exception",
+                extra=build_security_event_fields(
+                    request,
+                    event_type="UNHANDLED_EXCEPTION",
+                    action_attempted="authorize request",
+                    result="failure",
+                    status_code=500,
+                    exception_type=exc.__class__.__name__,
+                ),
             )
             return JsonResponse(
                 {

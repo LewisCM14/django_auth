@@ -60,6 +60,32 @@ class TestSettingsImportValidation:
 
         assert module.ALLOWED_HOSTS == ["localhost", "127.0.0.1"]
 
+    def test_invalid_cors_allowed_origin_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Importing settings fails when a CORS origin is malformed."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://frontend.example.com/path")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(ImproperlyConfigured, match="CORS_ALLOWED_ORIGINS"):
+                _load_settings_module("test_settings_invalid_cors_origin")
+
+    def test_missing_allowed_hosts_in_iis_mode_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Importing settings fails when IIS mode has no explicit ALLOWED_HOSTS."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+        monkeypatch.setenv("ALLOWED_HOSTS", "")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(ImproperlyConfigured, match="ALLOWED_HOSTS"):
+                _load_settings_module("test_settings_missing_allowed_hosts_iis")
+
 
 class TestSettingsLoggingConfig:
     """Tests for LOGGING configuration exported by settings."""
@@ -108,6 +134,70 @@ class TestSettingsCacheConfig:
         assert module.CACHES["default"]["BACKEND"] == (
             "django.core.cache.backends.locmem.LocMemCache"
         )
+
+
+class TestSettingsSecurityConfig:
+    """Tests for security-oriented Django settings."""
+
+    def test_security_headers_defaults_in_dev_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Development mode keeps transport headers conservative and local-only."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_security_dev")
+
+        assert module.SECURE_PROXY_SSL_HEADER is None
+        assert module.SECURE_HSTS_SECONDS == 0
+        assert module.SESSION_COOKIE_SECURE is False
+        assert module.CSRF_COOKIE_SECURE is False
+        assert module.CORS_ALLOW_ALL_ORIGINS is False
+        assert module.CORS_ALLOW_CREDENTIALS is True
+        assert module.CORS_ALLOWED_ORIGINS == []
+        assert "script-src 'self'" in module.CONTENT_SECURITY_POLICY
+        assert "style-src 'self'" in module.CONTENT_SECURITY_POLICY
+
+    def test_security_headers_are_enabled_for_iis_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IIS mode enables hardened transport and cookie settings."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
+        monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+        monkeypatch.setenv(
+            "CORS_ALLOWED_ORIGINS",
+            "https://portal.corp.local,https://intranet.corp.local",
+        )
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_security_iis")
+
+        assert module.SECURE_PROXY_SSL_HEADER == ("HTTP_X_FORWARDED_PROTO", "https")
+        assert module.SECURE_SSL_REDIRECT is False
+        assert module.SECURE_HSTS_SECONDS == 31536000
+        assert module.SECURE_HSTS_INCLUDE_SUBDOMAINS is True
+        assert module.SECURE_HSTS_PRELOAD is False
+        assert module.SECURE_CONTENT_TYPE_NOSNIFF is True
+        assert module.SECURE_REFERRER_POLICY == "same-origin"
+        assert module.X_FRAME_OPTIONS == "DENY"
+        assert module.SESSION_COOKIE_SECURE is True
+        assert module.SESSION_COOKIE_HTTPONLY is True
+        assert module.SESSION_COOKIE_SAMESITE == "Lax"
+        assert module.CSRF_COOKIE_SECURE is True
+        assert module.CSRF_COOKIE_HTTPONLY is True
+        assert module.CSRF_COOKIE_SAMESITE == "Lax"
+        assert module.CORS_ALLOW_ALL_ORIGINS is False
+        assert module.CORS_ALLOW_CREDENTIALS is True
+        assert module.CORS_ALLOWED_ORIGINS == [
+            "https://portal.corp.local",
+            "https://intranet.corp.local",
+        ]
+        assert "script-src 'self'" in module.CONTENT_SECURITY_POLICY
+        assert "style-src 'self'" in module.CONTENT_SECURITY_POLICY
 
 
 class TestSettingsVersionConfig:
@@ -190,3 +280,31 @@ class TestSettingsLdapConfig:
 
         assert module.LDAP_SERVER_URI == "ldap://dc.corp.local"
         assert module.LDAP_BASE_DN == "DC=corp,DC=local"
+
+    def test_invalid_ldap_server_uri_in_iis_mode_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IIS mode rejects malformed LDAP server URIs."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
+        monkeypatch.setenv("LDAP_SERVER_URI", "http://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(ImproperlyConfigured, match="LDAP_SERVER_URI"):
+                _load_settings_module("test_settings_invalid_ldap_uri")
+
+    def test_invalid_ldap_base_dn_in_iis_mode_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IIS mode rejects malformed LDAP base DNs."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
+        monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "not-a-dn")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(ImproperlyConfigured, match="LDAP_BASE_DN"):
+                _load_settings_module("test_settings_invalid_ldap_dn")

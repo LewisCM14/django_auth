@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
@@ -247,6 +248,41 @@ class TestRequestIdMiddlewareAccessLogging:
             if r.name == "api.middleware.request_id"
         ]
         assert any("testuser" in m for m in messages)
+
+    def test_access_log_includes_security_fields(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Access log carries the structured security context fields."""
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
+        middleware = RequestIdMiddleware(get_response=lambda r: HttpResponse())
+        request = self.factory.get(
+            "/api/health/",
+            REMOTE_ADDR="203.0.113.10",
+            HTTP_USER_AGENT="pytest-agent",
+        )
+        user = Mock(is_authenticated=True)
+        user.get_username.return_value = "testuser"
+        request.user = user
+        middleware.process_request(request)
+        response = HttpResponse(status=200)
+
+        with caplog.at_level(logging.INFO, logger="api.middleware.request_id"):
+            middleware.process_response(request, response)
+
+        record = cast(
+            Any,
+            next(r for r in caplog.records if r.name == "api.middleware.request_id"),
+        )
+
+        assert record.event_type == "ACCESS"
+        assert record.user_identifier == "testuser"
+        assert record.source_ip == "203.0.113.10"
+        assert record.user_agent == "pytest-agent"
+        assert record.action_attempted == "GET"
+        assert record.result == "success"
+        assert record.resource_accessed == "/api/health/"
+        assert record.status_code == 200
+        assert record.request_id == response["X-Request-ID"]
 
     def test_access_log_shows_anonymous_when_unauthenticated(
         self, caplog: pytest.LogCaptureFixture

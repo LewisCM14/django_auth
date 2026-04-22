@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 from typing import Any, cast
 
@@ -168,8 +169,19 @@ class TestThrottleDecoratorOnDjangoView:
 
         view = DecoratedView.as_view()
 
-        first_response = view(RequestFactory().get("/decorated/"))
-        second_response = view(RequestFactory().get("/decorated/"))
+        first_response = view(
+            RequestFactory().get(
+                "/decorated/",
+                REMOTE_ADDR="203.0.113.12",
+                HTTP_USER_AGENT="pytest-agent",
+            )
+        )
+        second_request = RequestFactory().get(
+            "/decorated/",
+            REMOTE_ADDR="203.0.113.12",
+            HTTP_USER_AGENT="pytest-agent",
+        )
+        second_response = view(second_request)
 
         assert first_response.status_code == 200
         assert second_response.status_code == 429
@@ -177,6 +189,48 @@ class TestThrottleDecoratorOnDjangoView:
         payload = json.loads(second_response.content)
         assert "throttled" in payload["detail"].lower()
         assert "request_id" in payload
+
+    def test_blocks_request_over_limit_logs_security_event(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Throttle denials emit a structured security log with the request context."""
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
+
+        @throttle("1/minute")
+        class DecoratedView(View):
+            """Simple view used for throttle decorator tests."""
+
+            def get(self, request: HttpRequest) -> JsonResponse:
+                """Return a success payload."""
+                del request
+                return JsonResponse({"ok": True})
+
+        view = DecoratedView.as_view()
+
+        _ = view(
+            RequestFactory().get(
+                "/decorated/",
+                REMOTE_ADDR="203.0.113.12",
+                HTTP_USER_AGENT="pytest-agent",
+            )
+        )
+        second_request = RequestFactory().get(
+            "/decorated/",
+            REMOTE_ADDR="203.0.113.12",
+            HTTP_USER_AGENT="pytest-agent",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="api.throttling"):
+            response = view(second_request)
+
+        assert response.status_code == 429
+        record = cast(
+            Any, next(r for r in caplog.records if r.name == "api.throttling")
+        )
+        assert record.event_type == "RATE_LIMIT_TRIGGERED"
+        assert record.action_attempted == "GET"
+        assert record.result == "failure"
+        assert record.status_code == 429
 
     def test_includes_retry_after_header(self) -> None:
         """Throttle denial includes a numeric Retry-After header."""
