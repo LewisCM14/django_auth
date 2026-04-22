@@ -20,7 +20,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
-from api.constants import ROLE_ADMIN, ROLE_VIEWER
+from api.constants import ADMIN_AD_GROUP, ROLE_ADMIN, ROLE_VIEWER, VIEWER_AD_GROUP
 from api.middleware.authorization import AuthorizationMiddleware
 from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
 
@@ -134,7 +134,7 @@ class TestAuthorizationMiddlewareIISMode:
         view_func = _make_roles_view()
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
-            mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
+            mock_ldap.return_value = [ADMIN_AD_GROUP]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
                 result = middleware.process_view(request, view_func, [], {})
 
@@ -150,7 +150,7 @@ class TestAuthorizationMiddlewareIISMode:
         view_func = _make_roles_view()
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
-            mock_ldap.return_value = ["CN=app-viewers,OU=Groups,DC=corp,DC=local"]
+            mock_ldap.return_value = [VIEWER_AD_GROUP]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
                 result = middleware.process_view(request, view_func, [], {})
 
@@ -167,8 +167,8 @@ class TestAuthorizationMiddlewareIISMode:
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = [
-                "CN=app-admins,OU=Groups,DC=corp,DC=local",
-                "CN=app-viewers,OU=Groups,DC=corp,DC=local",
+                ADMIN_AD_GROUP,
+                VIEWER_AD_GROUP,
             ]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
                 result = middleware.process_view(request, view_func, [], {})
@@ -218,7 +218,7 @@ class TestAuthorizationMiddlewareIISMode:
         view_func = _make_roles_view()
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
-            mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
+            mock_ldap.return_value = [ADMIN_AD_GROUP]
 
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
                 request1 = Mock()
@@ -346,7 +346,7 @@ class TestAuthorizationMiddlewareIISMode:
         view_func = _make_roles_view(roles=("app_admin",))
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
-            mock_ldap.return_value = ["CN=app-viewers,OU=Groups,DC=corp,DC=local"]
+            mock_ldap.return_value = [VIEWER_AD_GROUP]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
                 result = middleware.process_view(request, view_func, [], {})
 
@@ -377,7 +377,7 @@ class TestAuthorizationMiddlewareIISMode:
         wrapped_view.view_class = MisconfiguredRolesView  # type: ignore[attr-defined]
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
-            mock_ldap.return_value = ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
+            mock_ldap.return_value = [ADMIN_AD_GROUP]
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
                 from django.core.exceptions import ImproperlyConfigured
 
@@ -492,7 +492,7 @@ class TestQueryLdapGroups:
         from api.middleware.authorization import query_ldap_groups
 
         expected_groups = [
-            "CN=app-admins,OU=Groups,DC=corp,DC=local",
+            ADMIN_AD_GROUP,
             "CN=domain-users,OU=Groups,DC=corp,DC=local",
         ]
         mock_entry = Mock()

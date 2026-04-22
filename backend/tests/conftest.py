@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 from django.test import Client
 
+from api.constants import ADMIN_AD_GROUP, VIEWER_AD_GROUP
+
 
 @pytest.fixture
 def admin_client(monkeypatch: pytest.MonkeyPatch) -> Client:
@@ -21,7 +23,7 @@ def admin_client(monkeypatch: pytest.MonkeyPatch) -> Client:
     def mock_query_ldap_groups(username: str) -> list[str]:
         """Return mocked AD groups for known test identities."""
         if username == "DOMAIN\\admin_user":
-            return ["CN=app-admins,OU=Groups,DC=corp,DC=local"]
+            return [ADMIN_AD_GROUP]
         return []
 
     monkeypatch.setattr(
@@ -42,7 +44,7 @@ def viewer_client(monkeypatch: pytest.MonkeyPatch) -> Client:
     def mock_query_ldap_groups(username: str) -> list[str]:
         """Return mocked AD groups for known test identities."""
         if username == "DOMAIN\\viewer_user":
-            return ["CN=app-viewers,OU=Groups,DC=corp,DC=local"]
+            return [VIEWER_AD_GROUP]
         return []
 
     monkeypatch.setattr(

@@ -27,7 +27,11 @@ DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
 DEV_USER_IDENTITY=dev_admin
 DEV_USER_ROLE=app_admin
+ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
+VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
 ```
+
+Keep `ADMIN_AD_GROUP` and `VIEWER_AD_GROUP` populated in every environment. Dev mode does not query LDAP, but the values are validated at startup so deployment-specific `.env` files stay complete.
 
 ### 4) Apply migrations
 

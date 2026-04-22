@@ -1041,12 +1041,13 @@ The `detail` and `request_id` fields match the standard error envelope. The `Ret
 
 ### Local Development
 
-*To support local development and testing without requiring IIS, Active Directory, or LDAP, the backend provides a **development mode** that bypasses/mocks authentication and authorization. This enables developers to run the application and all tests locally with minimal setup. Environment variables are loaded from `.env` files using `python-dotenv`.*
+*To support local development and testing without requiring IIS, Active Directory, or LDAP, the backend provides a **development mode** that bypasses/mocks authentication and authorization. This enables developers to run the application and all tests locally with minimal setup. Environment variables are loaded from `.env` files using `python-dotenv`, and the AD group DNs used for role mapping must still be present so startup validation can fail fast if deployment configuration is incomplete.*
 
 - A configuration option (environment variable `AUTH_MODE=dev`) is available to switch the backend into development mode.
 - In development mode:
     - Authentication middleware injects a mock user identity (e.g., dev_admin or dev_viewer).
     - Authorization middleware assigns a canonical application role based on a second environment variable (`DEV_USER_ROLE`). The value must match one of the roles defined in `api.constants.ROLES` (for example `app_admin` or `app_viewer`).
+    - `ADMIN_AD_GROUP` and `VIEWER_AD_GROUP` remain required and provide the canonical AD group DNs for role mapping in every environment.
     - LDAP/AD lookups are skipped or mocked.
 - This mode must be used for local development, automated testing, and CI pipelines.
 
@@ -1056,27 +1057,36 @@ Example .env for Local Development:
 AUTH_MODE=dev
 DEV_USER_IDENTITY=dev_admin
 DEV_USER_ROLE=app_admin
+ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
+VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
 ```
 
 **Security Note: Development mode must never be enabled in production or on any externally accessible environment. This is enforced at startup: the application will refuse to start if `AUTH_MODE=dev` is set while `DEBUG=False`. This check runs in the Django `AppConfig.ready()` method to guarantee it cannot be bypassed.**
 
 #### Adding a New Role
 
-The authorization system is designed so that new roles can be introduced without modifying middleware or permissions infrastructure. Only three files need to change:
+The authorization system is designed so that new roles can be introduced without modifying middleware or permissions infrastructure. Only four deployment/code touchpoints need to change:
 
-1. **`api/constants.py`** — Define the role constant and map the AD group:
+1. **The deployment `.env` file** — add the new AD group DN for the role, for example:
+    ```env
+    AUDITOR_AD_GROUP=CN=app-auditors,OU=Groups,DC=corp,DC=local
+    ```
+
+2. **`api/constants.py`** — Define the role constant and extend `AD_GROUP_TO_ROLE_MAP` to read the new env var:
     ```python
     ROLE_AUDITOR: Final[str] = "app_auditor"
     ROLES = (ROLE_ADMIN, ROLE_VIEWER, ROLE_AUDITOR)
 
+    AUDITOR_AD_GROUP = _required_env("AUDITOR_AD_GROUP")
+
     AD_GROUP_TO_ROLE_MAP: dict[str, str] = {
-        "CN=app-admins,OU=Groups,DC=corp,DC=local": ROLE_ADMIN,
-        "CN=app-viewers,OU=Groups,DC=corp,DC=local": ROLE_VIEWER,
-        "CN=app-auditors,OU=Groups,DC=corp,DC=local": ROLE_AUDITOR,
+        ADMIN_AD_GROUP: ROLE_ADMIN,
+        VIEWER_AD_GROUP: ROLE_VIEWER,
+        AUDITOR_AD_GROUP: ROLE_AUDITOR,
     }
     ```
 
-2. **`api/views/<view>.py`** — Use the role in a view's `@authz_roles` decorator:
+3. **`api/views/<view>.py`** — Use the role in a view's `@authz_roles` decorator:
     ```python
     from api.permissions import authz_roles
     from api.constants import ROLE_AUDITOR
@@ -1086,7 +1096,7 @@ The authorization system is designed so that new roles can be introduced without
         ...
     ```
 
-3. **`api/urls.py`** — Wire the new view into the URL configuration.
+4. **`api/urls.py`** — Wire the new view into the URL configuration.
 
 No changes to `api/permissions.py` or `api/middleware/authorization.py` are required. The middleware resolves roles dynamically from `AD_GROUP_TO_ROLE_MAP` and the `@authz_roles` decorator accepts arbitrary role strings.
 
@@ -1098,6 +1108,8 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `DEBUG`                  | No       | `True`, `False`          | `False`     | Django debug mode. Must be `False` in production. |
 | `DEV_USER_IDENTITY`      | dev only | Any string               | `dev_admin` | Mock username injected in dev mode. |
 | `DEV_USER_ROLE`          | dev only | `app_admin`, `app_viewer` | —          | Role assigned to the mock user in dev mode. Must match one of the roles defined in `api.constants.ROLES`. |
+| `ADMIN_AD_GROUP`         | Yes      | LDAP distinguished name  | —           | Active Directory group DN mapped to `app_admin`. |
+| `VIEWER_AD_GROUP`        | Yes      | LDAP distinguished name  | —           | Active Directory group DN mapped to `app_viewer`. |
 | `API_VERSION`            | No       | SemVer tag / build label | `APP_VERSION` | Application version surfaced by `/api/health/` and `drf-spectacular`; the tagged release pipeline replaces this placeholder with the release tag. |
 | `LDAP_SERVER_URI`        | iis only | LDAP URI                 | —           | LDAP server URI reserved for the real Active Directory group lookup implementation. |
 | `LDAP_BASE_DN`           | iis only | Distinguished name       | —           | Base DN reserved for the real Active Directory group membership search. |
@@ -1125,7 +1137,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
 1. **Configure Environment Variables**
 
-    Create a `.env` file in the backend root (or set system environment variables) with production values. At a minimum:
+    Azure DevOps should copy the selected deployment artifact (`.env.qa`, `.env.uat`, or `.env.prod`) into `backend/.env` before IIS starts the app, or set system environment variables directly. The resulting runtime `.env` must contain at least:
 
     ```
     AUTH_MODE=iis
@@ -1133,6 +1145,8 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     SECRET_KEY=<unique-unpredictable-value>
     ALLOWED_HOSTS=<server-hostname>
     API_VERSION=APP_VERSION
+    ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
+    VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
     LDAP_SERVER_URI=ldap://dc.corp.local
     LDAP_BASE_DN=DC=corp,DC=local
     LOG_FORMAT=json

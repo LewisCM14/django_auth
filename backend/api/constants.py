@@ -5,7 +5,10 @@ Includes role definitions, LDAP mappings, and other application-wide constants.
 
 from __future__ import annotations
 
+import os
 from typing import Final
+
+from django.core.exceptions import ImproperlyConfigured
 
 # Application roles
 ROLE_ADMIN: Final[str] = "app_admin"
@@ -17,24 +20,32 @@ ROLE_VIEWER: Final[str] = "app_viewer"
 ROLES: Final[tuple[str, ...]] = (ROLE_ADMIN, ROLE_VIEWER)
 """All valid application roles."""
 
-# Map Active Directory groups to application roles
-# Keys are AD group names (as returned by LDAP), values are application roles
-# In production, these should be configured via environment variables or settings
+
+def _required_env(name: str) -> str:
+    """Return a required environment variable or fail fast."""
+
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise ImproperlyConfigured(
+            f"{name} is required. Set it in the active deployment .env file."
+        )
+    return value
+
+
+ADMIN_AD_GROUP: Final[str] = _required_env("ADMIN_AD_GROUP")
+VIEWER_AD_GROUP: Final[str] = _required_env("VIEWER_AD_GROUP")
+
+if ADMIN_AD_GROUP == VIEWER_AD_GROUP:
+    raise ImproperlyConfigured(
+        "ADMIN_AD_GROUP and VIEWER_AD_GROUP must reference different AD groups."
+    )
+
 AD_GROUP_TO_ROLE_MAP: Final[dict[str, str]] = {
-    "CN=app-admins,OU=Groups,DC=corp,DC=local": ROLE_ADMIN,
-    "CN=app-viewers,OU=Groups,DC=corp,DC=local": ROLE_VIEWER,
+    ADMIN_AD_GROUP: ROLE_ADMIN,
+    VIEWER_AD_GROUP: ROLE_VIEWER,
 }
 """Mapping of Active Directory group DNs to application roles.
 
-This map is used by the authorization middleware to translate AD group
-membership (from LDAP queries) into application-level roles. In production,
-these groups should match your organization's AD structure.
-
-Example AD group DN format:
-    CN=app-admins,OU=Groups,DC=corp,DC=local
-    
-Where:
-    CN = Common Name (group name)
-    OU = Organizational Unit
-    DC = Domain Component
+The mapping is loaded from environment variables so deployment-specific .env
+files can control which AD groups grant each application role.
 """
