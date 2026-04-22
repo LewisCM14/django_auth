@@ -117,6 +117,19 @@ class TestSettingsLoggingConfig:
         assert handler["stream"] == "ext://sys.stderr"
         assert "request_id" in handler["filters"]
 
+    def test_django_server_logger_is_silenced(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Runserver's built-in request logger is disabled to avoid duplicate access logs."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_django_server_logger")
+
+        assert module.LOGGING["loggers"]["django.server"]["handlers"] == []
+        assert module.LOGGING["loggers"]["django.server"]["propagate"] is False
+
 
 class TestSettingsCacheConfig:
     """Tests for cache backend configuration exported by settings."""

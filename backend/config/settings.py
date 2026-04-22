@@ -245,6 +245,10 @@ LOGGING: dict[str, Any] = {
             "handlers": ["console"],
             "propagate": False,
         },
+        "django.server": {
+            "handlers": [],
+            "propagate": False,
+        },
         "django": {
             "level": "INFO" if AUTH_MODE == "dev" else "WARNING",
             "handlers": ["console"],

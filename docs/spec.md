@@ -581,6 +581,7 @@ Implementation note: this endpoint is implemented as a DRF `APIView` and declare
 3. **Per-request access log** — Every HTTP request/response pair is logged once with method, path, status code, duration (ms), user identity, source IP, user agent, and request-ID. This replaces the need for IIS access logs at the Django layer and provides richer context for operations and incident triage.
 4. **Security audit trail** — Authentication failures, authorization denials, validation failures, rate-limit denials, and unhandled exceptions emit typed security events via `api.security_logging.py` with structured fields (user, IP, user agent, resource, status code, duration where applicable).
 5. **No sensitive data in logs** — Request bodies, passwords, tokens, and PII beyond the username should never be logged. The `REMOTE_USER` header value (corporate username) is the only identity field included.
+6. **No duplicate runserver access log** — Django's built-in `django.server` request logger is silenced so the middleware-owned access log is the single request log line during local development.
 
 ```mermaid
 ---
