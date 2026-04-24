@@ -41,7 +41,7 @@ class TestAuthenticationMiddlewareDevMode:
 
     @staticmethod
     def get_response(request: HttpRequest) -> Mock:
-        """Mock WSGI application for middleware testing."""
+        """Mock ASGI application for middleware testing."""
         response = Mock()
         response.status_code = 200
         return response
@@ -131,7 +131,7 @@ class TestAuthenticationMiddlewareIISMode:
 
     @staticmethod
     def get_response(request: HttpRequest) -> Mock:
-        """Mock WSGI application for middleware testing."""
+        """Mock ASGI application for middleware testing."""
         response = Mock()
         response.status_code = 200
         return response

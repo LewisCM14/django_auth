@@ -380,8 +380,7 @@ backend/
 │     ├── logging.py
 │     ├── pytest_settings.py
 │     ├── settings.py
-│     ├── urls.py
-│     └── wsgi.py
+│     └── urls.py
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py
@@ -412,8 +411,7 @@ backend/
 │   └── config/
 │       ├── __init__.py
 │       ├── test_logging.py
-│       ├── test_settings.py
-│       └── test_wsgi.py
+│       └── test_settings.py
 ├── .env.example
 ├── manage.py
 ├── mypy.ini
@@ -1261,12 +1259,12 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
                verb="*"
                modules="FastCgiModule"
                processPath="<conda-env-path>\python.exe"
-               arguments="-m uvicorn config.wsgi:application --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%"
+               arguments="-m uvicorn config.asgi:application --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%"
                resourceType="Unspecified" />
         </handlers>
       </system.webServer>
       <appSettings>
-        <!-- No longer required: <add key="WSGI_HANDLER" value="config.wsgi.application" /> -->
+        <!-- No longer required: <add key="ASGI_HANDLER" value="config.asgi.application" /> -->
         <add key="PYTHONPATH" value="<backend-root-path>" />
         <add key="DJANGO_SETTINGS_MODULE" value="config.settings" />
       </appSettings>

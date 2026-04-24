@@ -12,7 +12,7 @@ Replace wfastcgi with IIS HttpPlatformHandler, running Django via Uvicorn (ASGI)
 	- Set the `X-Remote-User` HTTP header to the value of `{REMOTE_USER}` for authenticated requests.
 	- Remove any incoming `X-Remote-User` header from client requests to prevent spoofing.
 3. **Install and configure HttpPlatformHandler**:
-	- Set the process path to launch Uvicorn (e.g., `python -m uvicorn config.wsgi:application --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%`).
+	- Set the process path to launch Uvicorn (e.g., `python -m uvicorn config.asgi:application --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%`).
 	- Ensure the backend listens on the port provided by HttpPlatformHandler.
 4. **Remove all wfastcgi configuration** from IIS and deployment scripts.
 
@@ -43,7 +43,7 @@ Replace wfastcgi with IIS HttpPlatformHandler, running Django via Uvicorn (ASGI)
 	- Remove wfastcgi.
 	- Add Uvicorn as a dependency.
 	- Ensure the app is started with Uvicorn in production.
-2. **Document the new process startup** (e.g., `python -m uvicorn config.wsgi:application ...`).
+2. **Document the new process startup** (e.g., `python -m uvicorn config.asgi:application ...`).
 
 ---
 
