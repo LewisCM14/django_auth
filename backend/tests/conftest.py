@@ -33,7 +33,7 @@ def admin_client(monkeypatch: pytest.MonkeyPatch) -> Client:
     monkeypatch.setenv("AUTH_MODE", "iis")
 
     client = Client()
-    client.defaults["HTTP_REMOTE_USER"] = "DOMAIN\\admin_user"
+    client.defaults["HTTP_X_REMOTE_USER"] = "DOMAIN\\admin_user"
     return client
 
 
@@ -54,7 +54,7 @@ def viewer_client(monkeypatch: pytest.MonkeyPatch) -> Client:
     monkeypatch.setenv("AUTH_MODE", "iis")
 
     client = Client()
-    client.defaults["HTTP_REMOTE_USER"] = "DOMAIN\\viewer_user"
+    client.defaults["HTTP_X_REMOTE_USER"] = "DOMAIN\\viewer_user"
     return client
 
 
@@ -81,5 +81,5 @@ def unauthorized_client(monkeypatch: pytest.MonkeyPatch) -> Client:
     monkeypatch.setenv("AUTH_MODE", "iis")
 
     client = Client()
-    client.defaults["HTTP_REMOTE_USER"] = "DOMAIN\\unauthorized_user"
+    client.defaults["HTTP_X_REMOTE_USER"] = "DOMAIN\\unauthorized_user"
     return client

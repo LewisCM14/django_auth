@@ -114,21 +114,19 @@ class AuthenticationMiddleware:
                 ),
             )
         else:
-            # IIS mode: read REMOTE_USER and create/retrieve user
-            remote_user = request.META.get("REMOTE_USER") or request.META.get(
-                "HTTP_REMOTE_USER"
-            )
+            # Production mode: read X-Remote-User and create/retrieve user
+            remote_user = request.META.get("HTTP_X_REMOTE_USER")
             if remote_user:
                 try:
                     validate_username(remote_user, allow_domain_prefix=True)
                 except ImproperlyConfigured:
-                    # Invalid REMOTE_USER values are treated as anonymous to fail closed.
+                    # Invalid X-Remote-User values are treated as anonymous to fail closed.
                     logger.warning(
-                        "invalid REMOTE_USER rejected",
+                        "invalid X-Remote-User rejected",
                         extra=build_security_event_fields(
                             request,
                             event_type="INPUT_VALIDATION_FAILURE",
-                            action_attempted="validate REMOTE_USER",
+                            action_attempted="validate X-Remote-User",
                             result="failure",
                             user_identifier="anonymous",
                         ),
@@ -145,7 +143,7 @@ class AuthenticationMiddleware:
                     extra=build_security_event_fields(
                         request,
                         event_type="AUTHENTICATION_SUCCESS",
-                        action_attempted="authenticate REMOTE_USER",
+                        action_attempted="authenticate X-Remote-User",
                         result="success",
                         user_identifier=remote_user,
                     ),

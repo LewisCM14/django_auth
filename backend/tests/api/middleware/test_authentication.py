@@ -138,39 +138,80 @@ class TestAuthenticationMiddlewareIISMode:
 
     @override_settings(DEBUG=False)
     @pytest.mark.django_db
-    def test_iis_mode_reads_remote_user(self) -> None:
-        """In IIS mode, middleware reads the REMOTE_USER header.
-
-        The request.user.username should match the REMOTE_USER value
-        provided by IIS (typically DOMAIN\\username).
-        """
-        middleware = AuthenticationMiddleware(self.get_response)
+    @pytest.mark.parametrize(
+        "remote_user",
+        [
+            "A" * 65,  # Overlong username (65 chars)
+            "DOMAIN\\' OR 1=1--",  # SQL injection-like
+            "DOMAIN\\user; DROP TABLE users;--",  # SQL injection-like
+            "<script>alert(1)</script>",  # XSS-like
+        ],
+    )
+    def test_iis_mode_rejects_overlong_and_injection_x_remote_user(
+        self, remote_user: str
+    ) -> None:
+        """Overlong or dangerous X-Remote-User values are treated as anonymous."""
+        get_response = self.get_response
+        middleware = AuthenticationMiddleware(get_response)
         request = Mock()
-        remote_user = "DOMAIN\\testuser"
-        request.META = {"REMOTE_USER": remote_user}
+        request.META = {"HTTP_X_REMOTE_USER": remote_user}
         request.user = None
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             middleware.process_request(request)
 
-        # In IIS mode, request.user should be set to reflect REMOTE_USER
+        assert request.user is not None
+        assert not request.user.is_authenticated
+
+    @override_settings(DEBUG=False)
+    def test_iis_mode_missing_x_remote_user_fails_closed(self) -> None:
+        """Missing X-Remote-User header always results in unauthenticated user (fail closed)."""
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.META = {}  # No X-Remote-User
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            middleware.process_request(request)
+
+        assert request.user is not None
+        assert not request.user.is_authenticated
+
+    @override_settings(DEBUG=False)
+    @pytest.mark.django_db
+    def test_iis_mode_reads_x_remote_user(self) -> None:
+        """In IIS mode, middleware reads the X-Remote-User header.
+
+        The request.user.username should match the X-Remote-User value
+        provided by IIS (typically DOMAIN\\username).
+        """
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        remote_user = "DOMAIN\\testuser"
+        request.META = {"HTTP_X_REMOTE_USER": remote_user}
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            middleware.process_request(request)
+
+        # In IIS mode, request.user should be set to reflect X-Remote-User
         assert request.user is not None
         assert request.user.username == remote_user
 
     @override_settings(DEBUG=False)
-    def test_iis_mode_missing_remote_user_raises(self) -> None:
-        """When REMOTE_USER is missing in IIS mode, authentication fails.
+    def test_iis_mode_missing_x_remote_user_raises(self) -> None:
+        """When X-Remote-User is missing in iis mode, authentication fails.
 
-        Without REMOTE_USER, the request is unauthenticated and should
+        Without X-Remote-User, the request is unauthenticated and should
         be rejected (by raising an exception or setting request.user to None).
         """
         middleware = AuthenticationMiddleware(self.get_response)
         request = Mock()
-        request.META = {}  # No REMOTE_USER
+        request.META = {}  # No X-Remote-User
         request.user = None
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
-            # In IIS mode without REMOTE_USER, should handle gracefully
+            # In IIS mode without X_REMOTE_USER, should handle gracefully
             # (either leave user as None or raise)
             middleware.process_request(request)
 
@@ -180,15 +221,15 @@ class TestAuthenticationMiddlewareIISMode:
     @override_settings(DEBUG=False)
     @pytest.mark.django_db
     def test_iis_mode_creates_django_user_on_first_request(self) -> None:
-        """First request with new REMOTE_USER creates a Django User.
+        """First request with new X-Remote-User creates a Django User.
 
         The middleware should query or create a Django User object via
-        RemoteUserBackend when a new REMOTE_USER is encountered.
+        RemoteUserBackend when a new X-Remote-User is encountered.
         """
         middleware = AuthenticationMiddleware(self.get_response)
         request = Mock()
         remote_user = "DOMAIN\\newuser"
-        request.META = {"REMOTE_USER": remote_user}
+        request.META = {"HTTP_X_REMOTE_USER": remote_user}
         request.user = None
 
         # Ensure the user doesn't exist
@@ -203,10 +244,10 @@ class TestAuthenticationMiddlewareIISMode:
     @override_settings(DEBUG=False)
     @pytest.mark.django_db
     def test_iis_mode_reuses_existing_user(self) -> None:
-        """Subsequent requests with same REMOTE_USER reuse the User.
+        """Subsequent requests with same X-Remote-User reuse the User.
 
         The middleware should not create duplicate User objects for the
-        same REMOTE_USER value.
+        same X-Remote-User value.
         """
         middleware = AuthenticationMiddleware(self.get_response)
         remote_user = "DOMAIN\\existinguser"
@@ -217,7 +258,7 @@ class TestAuthenticationMiddlewareIISMode:
         assert original_pk is not None
 
         request = Mock()
-        request.META = {"REMOTE_USER": remote_user}
+        request.META = {"HTTP_X_REMOTE_USER": remote_user}
         request.user = None
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
@@ -228,11 +269,11 @@ class TestAuthenticationMiddlewareIISMode:
 
     @override_settings(DEBUG=False)
     @pytest.mark.django_db
-    def test_iis_mode_rejects_invalid_remote_user(self) -> None:
-        """Invalid REMOTE_USER values are treated as anonymous."""
+    def test_iis_mode_rejects_invalid_x_remote_user(self) -> None:
+        """Invalid X-Remote-User values are treated as anonymous."""
         middleware = AuthenticationMiddleware(self.get_response)
         request = Mock()
-        request.META = {"REMOTE_USER": "DOMAIN\\bad/user"}
+        request.META = {"HTTP_X_REMOTE_USER": "DOMAIN\\bad/user"}
         request.user = None
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
@@ -246,13 +287,13 @@ class TestAuthenticationMiddlewareIISMode:
     def test_iis_mode_logs_authentication_success(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Successful REMOTE_USER resolution emits a structured auth success log."""
+        """Successful X-Remote-User resolution emits a structured auth success log."""
         monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
         middleware = AuthenticationMiddleware(self.get_response)
         request = Mock()
         request.path = "/api/user/"
         request.META = {
-            "REMOTE_USER": "DOMAIN\\testuser",
+            "HTTP_X_REMOTE_USER": "DOMAIN\\testuser",
             "REMOTE_ADDR": "198.51.100.2",
             "HTTP_USER_AGENT": "pytest-agent",
         }
@@ -270,23 +311,23 @@ class TestAuthenticationMiddlewareIISMode:
         )
         assert record.event_type == "AUTHENTICATION_SUCCESS"
         assert record.user_identifier == "DOMAIN\\testuser"
-        assert record.action_attempted == "authenticate REMOTE_USER"
+        assert record.action_attempted == "authenticate X-Remote-User"
         assert record.result == "success"
         assert record.source_ip == "198.51.100.2"
         assert record.user_agent == "pytest-agent"
 
     @override_settings(DEBUG=False)
     @pytest.mark.django_db
-    def test_iis_mode_logs_invalid_remote_user(
+    def test_iis_mode_logs_invalid_x_remote_user(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Invalid REMOTE_USER values emit a structured validation failure log."""
+        """Invalid X-Remote-User values emit a structured validation failure log."""
         monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
         middleware = AuthenticationMiddleware(self.get_response)
         request = Mock()
         request.path = "/api/user/"
         request.META = {
-            "REMOTE_USER": "DOMAIN\\bad/user",
+            "HTTP_X_REMOTE_USER": "DOMAIN\\bad/user",
             "REMOTE_ADDR": "198.51.100.2",
             "HTTP_USER_AGENT": "pytest-agent",
         }
@@ -306,7 +347,7 @@ class TestAuthenticationMiddlewareIISMode:
         )
         assert record.event_type == "INPUT_VALIDATION_FAILURE"
         assert record.user_identifier == "anonymous"
-        assert record.action_attempted == "validate REMOTE_USER"
+        assert record.action_attempted == "validate X-Remote-User"
         assert record.result == "failure"
         assert record.source_ip == "198.51.100.2"
         assert record.user_agent == "pytest-agent"
