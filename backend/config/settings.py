@@ -91,6 +91,7 @@ TEMPLATES = [
     },
 ]
 
+ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {
     "default": {
