@@ -163,25 +163,7 @@ def _throttle_class(cls: type[View], rate: str) -> type[View]:
         throttle_instance = RemoteUserRateThrottle()
         if not throttle_instance.allow_request(request, self):
             wait_seconds = _throttle_wait_seconds(throttle_instance)
-            detail = _throttle_detail(wait_seconds)
-            request_id = getattr(request, "request_id", request_id_var.get())
-            logger.warning(
-                "rate limit exceeded",
-                extra=build_security_event_fields(
-                    request,
-                    event_type="RATE_LIMIT_TRIGGERED",
-                    action_attempted=getattr(request, "method", "request"),
-                    result="failure",
-                    status_code=429,
-                ),
-            )
-            response = JsonResponse(
-                {"detail": detail, "request_id": request_id},
-                status=429,
-            )
-            if wait_seconds is not None:
-                response["Retry-After"] = str(wait_seconds)
-            return response
+            return _build_throttled_response(request, wait_seconds)
         return original_dispatch(self, request, *args, **kwargs)
 
     setattr(cls, "dispatch", dispatch_with_throttle)
@@ -209,30 +191,37 @@ def _throttle_callable(func: Callable[..., Any], rate: str) -> Callable[..., Any
         stub = type(func.__qualname__, (), {"_throttle_rate": rate})()
         if not throttle_instance.allow_request(request, stub):
             wait_seconds = _throttle_wait_seconds(throttle_instance)
-            detail = _throttle_detail(wait_seconds)
-            request_id = getattr(request, "request_id", request_id_var.get())
-            logger.warning(
-                "rate limit exceeded",
-                extra=build_security_event_fields(
-                    request,
-                    event_type="RATE_LIMIT_TRIGGERED",
-                    action_attempted=getattr(request, "method", "request"),
-                    result="failure",
-                    status_code=429,
-                ),
-            )
-            response = JsonResponse(
-                {"detail": detail, "request_id": request_id},
-                status=429,
-            )
-            if wait_seconds is not None:
-                response["Retry-After"] = str(wait_seconds)
-            return response
+            return _build_throttled_response(request, wait_seconds)
 
         return func(*args, **kwargs)
 
     wrapper._throttle_rate = rate  # type: ignore[attr-defined]  # decorator injects attr not expressible on Callable type
     return wrapper
+
+
+def _build_throttled_response(
+    request: HttpRequest, wait_seconds: int | None
+) -> JsonResponse:
+    """Build and log a throttled response for both class/function views."""
+    detail = _throttle_detail(wait_seconds)
+    request_id = getattr(request, "request_id", request_id_var.get())
+    logger.warning(
+        "rate limit exceeded",
+        extra=build_security_event_fields(
+            request,
+            event_type="RATE_LIMIT_TRIGGERED",
+            action_attempted=getattr(request, "method", "request"),
+            result="failure",
+            status_code=429,
+        ),
+    )
+    response = JsonResponse(
+        {"detail": detail, "request_id": request_id},
+        status=429,
+    )
+    if wait_seconds is not None:
+        response["Retry-After"] = str(wait_seconds)
+    return response
 
 
 def _throttle_wait_seconds(throttle_instance: SimpleRateThrottle) -> int | None:
