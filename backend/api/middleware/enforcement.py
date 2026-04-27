@@ -14,18 +14,18 @@ takes place.  Missing any decorator raises ``ImproperlyConfigured``.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Awaitable
+from typing import Any, Callable, cast
 
+from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpRequest, HttpResponse
-from django.utils.decorators import sync_and_async_middleware
 
 from api.caching import CACHE_POLICY_ATTR
 from api.permissions import AUTHZ_POLICY_ATTR
 from api.throttling import THROTTLE_RATE_ATTR
 
 
-@sync_and_async_middleware
 class DecoratorEnforcementMiddleware:
     """Enforce that every project view declares all required decorators.
 
@@ -36,24 +36,28 @@ class DecoratorEnforcementMiddleware:
     apply the decorators).
     """
 
-    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+    def __init__(self, get_response: Callable[[HttpRequest], Any]) -> None:
         """Initialize the middleware.
 
         Args:
             get_response: The next middleware or view in the chain.
         """
         self.get_response = get_response
+        self.is_async = iscoroutinefunction(get_response)
+        if self.is_async:
+            markcoroutinefunction(self)
 
-    def __call__(self, request: HttpRequest) -> HttpResponse:
-        """Process the request and response.
+    def __call__(
+        self, request: HttpRequest
+    ) -> HttpResponse | Awaitable[HttpResponse]:
+        """Continue the request through sync or async middleware chains."""
+        if self.is_async:
+            return self.__acall__(request)
+        return cast(HttpResponse, self.get_response(request))
 
-        Args:
-            request: The HTTP request object.
-
-        Returns:
-            The HTTP response from the next middleware or view.
-        """
-        return self.get_response(request)
+    async def __acall__(self, request: HttpRequest) -> HttpResponse:
+        """Continue the request through the async middleware chain."""
+        return cast(HttpResponse, await self.get_response(request))
 
     def process_view(
         self,
