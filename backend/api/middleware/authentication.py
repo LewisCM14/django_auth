@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Callable
+from collections.abc import Awaitable
+from typing import Any, Callable, cast
 
+from asgiref.sync import iscoroutinefunction, markcoroutinefunction, sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.models import User
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpRequest, HttpResponse
-from django.utils.decorators import sync_and_async_middleware
 
 from api.validation import validate_username
 from api.security_logging import build_security_event_fields
@@ -22,7 +23,6 @@ from api.security_logging import build_security_event_fields
 logger = logging.getLogger(__name__)
 
 
-@sync_and_async_middleware
 class AuthenticationMiddleware:
     """Middleware that authenticates requests in dev or IIS mode.
 
@@ -37,26 +37,30 @@ class AuthenticationMiddleware:
     - Attaches AnonymousUser when REMOTE_USER is not present
     """
 
-    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+    def __init__(self, get_response: Callable[[HttpRequest], Any]) -> None:
         """Initialize the middleware.
 
         Args:
             get_response: The next middleware or view in the chain.
         """
         self.get_response = get_response
+        self.is_async = iscoroutinefunction(get_response)
+        if self.is_async:
+            markcoroutinefunction(self)
 
-    def __call__(self, request: HttpRequest) -> HttpResponse:
-        """Process the request and response.
-
-        Args:
-            request: The HTTP request object.
-
-        Returns:
-            The HTTP response from the next middleware or view.
-        """
+    def __call__(
+        self, request: HttpRequest
+    ) -> HttpResponse | Awaitable[HttpResponse]:
+        """Dispatch request handling for sync or async middleware chains."""
+        if self.is_async:
+            return self.__acall__(request)
         self.process_request(request)
-        response = self.get_response(request)
-        return response
+        return cast(HttpResponse, self.get_response(request))
+
+    async def __acall__(self, request: HttpRequest) -> HttpResponse:
+        """Run authentication in a thread and continue async middleware chain."""
+        await sync_to_async(self.process_request, thread_sensitive=True)(request)
+        return cast(HttpResponse, await self.get_response(request))
 
     def process_request(self, request: HttpRequest) -> None:
         """Authenticate the request and attach user to request object.
