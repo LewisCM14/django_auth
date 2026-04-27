@@ -33,6 +33,8 @@ VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
 
 Keep `ADMIN_AD_GROUP` and `VIEWER_AD_GROUP` populated in every environment. Dev mode does not query LDAP, but the values are validated at startup so deployment-specific `.env` files stay complete.
 
+For IIS deployments (`AUTH_MODE=iis`), also set `LDAP_SERVER_URI` and `LDAP_BASE_DN`. If your AD requires authenticated LDAP binds, set both `LDAP_BIND_USER` and `LDAP_BIND_PASSWORD` (or leave both blank).
+
 ### 4) Apply migrations
 
 ```bash

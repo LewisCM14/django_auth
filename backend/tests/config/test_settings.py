@@ -86,6 +86,40 @@ class TestSettingsImportValidation:
             with pytest.raises(ImproperlyConfigured, match="ALLOWED_HOSTS"):
                 _load_settings_module("test_settings_missing_allowed_hosts_iis")
 
+    def test_partial_ldap_bind_credentials_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bind username/password must be set together to avoid half-configured auth."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
+        monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+        monkeypatch.setenv("LDAP_BIND_USER", "CN=svc-ldap,OU=Svc,DC=corp,DC=local")
+        monkeypatch.setenv("LDAP_BIND_PASSWORD", "")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(ImproperlyConfigured, match="LDAP_BIND_USER"):
+                _load_settings_module("test_settings_partial_bind_credentials")
+
+    def test_ldap_bind_credentials_loaded_when_both_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both LDAP bind fields are loaded when configured."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
+        monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+        monkeypatch.setenv("LDAP_BIND_USER", "CN=svc-ldap,OU=Svc,DC=corp,DC=local")
+        monkeypatch.setenv("LDAP_BIND_PASSWORD", "secret")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_bind_credentials_loaded")
+
+        assert module.LDAP_BIND_USER == "CN=svc-ldap,OU=Svc,DC=corp,DC=local"
+        assert module.LDAP_BIND_PASSWORD == "secret"
+
 
 class TestSettingsLoggingConfig:
     """Tests for LOGGING configuration exported by settings."""

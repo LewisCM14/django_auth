@@ -6,8 +6,16 @@ On Windows Server 2022, this is served via IIS using HttpPlatformHandler and Uvi
 
 import os
 
-from django.core.asgi import get_asgi_application
-
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
-application = get_asgi_application()
+from django.conf import settings
+from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
+from django.core.asgi import get_asgi_application
+
+django_asgi_app = get_asgi_application()
+
+# In local development with Uvicorn, serve /static/* directly from Django so
+# Swagger UI sidecar assets load without requiring collectstatic + external web server.
+application = (
+    ASGIStaticFilesHandler(django_asgi_app) if settings.DEBUG else django_asgi_app
+)

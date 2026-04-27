@@ -19,6 +19,7 @@ from unittest.mock import Mock, patch
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
+from ldap3 import SIMPLE
 
 from api.constants import ADMIN_AD_GROUP, ROLE_ADMIN, ROLE_VIEWER, VIEWER_AD_GROUP
 from api.middleware.authorization import AuthorizationMiddleware
@@ -498,7 +499,7 @@ class TestQueryLdapGroups:
             assert query_ldap_groups("DOMAIN\\jsmith") == []
 
     def test_raises_on_connection_failure(self) -> None:
-        """Raises when the LDAP server is unreachable."""
+        """Returns [] when the LDAP server is unreachable (fail closed)."""
         from api.middleware.authorization import query_ldap_groups
 
         with override_settings(
@@ -509,8 +510,7 @@ class TestQueryLdapGroups:
                 "api.middleware.authorization.Connection",
                 side_effect=Exception("connection refused"),
             ):
-                with pytest.raises(Exception, match="connection refused"):
-                    query_ldap_groups("DOMAIN\\jsmith")
+                assert query_ldap_groups("DOMAIN\\jsmith") == []
 
     def test_returns_empty_when_no_entries_found(self) -> None:
         """Returns [] when the user has no LDAP entries."""
@@ -593,8 +593,8 @@ class TestQueryLdapGroups:
         call_kwargs = mock_conn.search.call_args[1]
         assert "jsmith" in call_kwargs["search_filter"]
 
-    def test_raises_on_search_exception(self) -> None:
-        """Raises when the search itself fails (unbind still called)."""
+    def test_returns_empty_on_search_exception(self) -> None:
+        """Returns [] when search fails (unbind still called)."""
         from api.middleware.authorization import query_ldap_groups
 
         mock_conn = Mock()
@@ -607,12 +607,11 @@ class TestQueryLdapGroups:
             with patch(
                 "api.middleware.authorization.Connection", return_value=mock_conn
             ):
-                with pytest.raises(Exception, match="search timeout"):
-                    query_ldap_groups("DOMAIN\\jsmith")
+                assert query_ldap_groups("DOMAIN\\jsmith") == []
                 mock_conn.unbind.assert_called_once()
 
     def test_unbind_called_even_on_search_failure(self) -> None:
-        """Connection is always unbound even when the search raises."""
+        """Connection is always unbound when the search fails."""
         from api.middleware.authorization import query_ldap_groups
 
         mock_conn = Mock()
@@ -625,9 +624,58 @@ class TestQueryLdapGroups:
             with patch(
                 "api.middleware.authorization.Connection", return_value=mock_conn
             ):
-                with pytest.raises(RuntimeError, match="network error"):
-                    query_ldap_groups("DOMAIN\\jsmith")
+                assert query_ldap_groups("DOMAIN\\jsmith") == []
                 mock_conn.unbind.assert_called_once()
+
+    def test_server_uses_ssl_for_ldaps_scheme(self) -> None:
+        """ldaps:// URIs create an SSL-enabled LDAP server."""
+        from api.middleware.authorization import query_ldap_groups
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local:636",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch("api.middleware.authorization.Server") as mock_server:
+                with patch("api.middleware.authorization.Connection") as mock_conn:
+                    mock_conn.return_value.entries = []
+                    query_ldap_groups("DOMAIN\\jsmith")
+
+        mock_server.assert_called_once_with("dc.corp.local", port=636, use_ssl=True)
+
+    def test_server_disables_ssl_for_ldap_scheme(self) -> None:
+        """ldap:// URIs create a non-SSL LDAP server configuration."""
+        from api.middleware.authorization import query_ldap_groups
+
+        with override_settings(
+            LDAP_SERVER_URI="ldap://dc.corp.local:389",
+            LDAP_BASE_DN="DC=corp,DC=local",
+        ):
+            with patch("api.middleware.authorization.Server") as mock_server:
+                with patch("api.middleware.authorization.Connection") as mock_conn:
+                    mock_conn.return_value.entries = []
+                    query_ldap_groups("DOMAIN\\jsmith")
+
+        mock_server.assert_called_once_with("dc.corp.local", port=389, use_ssl=False)
+
+    def test_uses_service_account_bind_when_credentials_configured(self) -> None:
+        """Connection uses SIMPLE bind when LDAP bind credentials are configured."""
+        from api.middleware.authorization import query_ldap_groups
+
+        with override_settings(
+            LDAP_SERVER_URI="ldaps://dc.corp.local",
+            LDAP_BASE_DN="DC=corp,DC=local",
+            LDAP_BIND_USER="CN=svc-ldap,OU=Svc,DC=corp,DC=local",
+            LDAP_BIND_PASSWORD="secret",
+        ):
+            with patch("api.middleware.authorization.Connection") as mock_conn:
+                mock_conn.return_value.entries = []
+                query_ldap_groups("DOMAIN\\jsmith")
+
+        _, kwargs = mock_conn.call_args
+        assert kwargs["auto_bind"] is True
+        assert kwargs["user"] == "CN=svc-ldap,OU=Svc,DC=corp,DC=local"
+        assert kwargs["password"] == "secret"
+        assert kwargs["authentication"] == SIMPLE
 
 
 class TestAuthorizationMiddlewareHelpers:

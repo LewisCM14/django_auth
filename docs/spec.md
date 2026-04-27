@@ -21,7 +21,7 @@
 ## Requirement
 
 - Must run on Windows Server 2022.
-- Must use `Python==3.14` & `Django>=6.0.0`.
+- Must use `Python==3.14` & `Django==5.2.13` (pinned in project dependencies).
 - Must integrate with the `djangorestframework>=3.0.0`.
 - Must integrate with `drf-spectacular` for provision of API documentation.
 - The application must use Windows Authentication via IIS, integrating directly with Active Directory for user authentication. 
@@ -48,7 +48,7 @@
 
 ## Design
 
-*Design intention is to use the `Representational State Transfer (REST)` protocol to provide `Backend-for-Frontend (BFF)` endpoints as the primary API style for the application. All authentication and authorization needs are handled by IIS using Windows Authentication and Active Directory. The backend receives user identity via IIS-injected `X-Remote-User` HTTP header. The application is served via ASGI (using Uvicorn under IIS HttpPlatformHandler in production). HTTPS is enforced at the IIS layer; the Django application assumes all traffic is TLS-terminated by the reverse proxy. CSRF protection is disabled for API views, as authentication is handled entirely by IIS via the `X-Remote-User` header and no session or cookie-based authentication is used. CORS is managed via `django-cors-headers`, supporting both same-origin deployments (where the frontend is served by the same IIS instance) and cross-origin deployments (where the frontend is hosted separately).*
+*Design intention is to use the `Representational State Transfer (REST)` protocol to provide `Backend-for-Frontend (BFF)` endpoints as the primary API style for the application. All authentication and authorization needs are handled by IIS using Windows Authentication and Active Directory. The backend receives user identity via IIS-injected `X-Remote-User` HTTP header. The application is served via ASGI (using Uvicorn under IIS HttpPlatformHandler in production). HTTPS is enforced at the IIS layer; the Django application assumes all traffic is TLS-terminated by the reverse proxy. CSRF middleware remains enabled in Django, while DRF session authentication is disabled so API authentication and authorization remain middleware-driven via IIS identity headers. CORS is managed via `django-cors-headers`, supporting both same-origin deployments (where the frontend is served by the same IIS instance) and cross-origin deployments (where the frontend is hosted separately).*
 
 ### Application Architecture Diagram
 
@@ -130,11 +130,10 @@ title: Application Technology — Level 0
 flowchart TD
     INFRA["`Infrastructure
 Windows Server 2022  ·  IIS  ·  HttpPlatformHandler  ·  Uvicorn`"]
-Windows Server 2022  ·  IIS  ·  wfastcgi`"]
     LANG["`Language
 Python 3.14`"]
     FW["`Web Framework
-Django 6.0+  ·  Django REST Framework 3.0+`"]
+Django 5.2.13  ·  Django REST Framework 3.17.1`"]
     AUTH["`Auth &amp; Directory
 IIS Windows Authentication  ·  ldap3  ·  Active Directory`"]
     LIBS["`Application Libraries
@@ -157,15 +156,14 @@ flowchart LR
 
     subgraph Production["`Production Dependencies`"]
         CORE_L1["`Core Framework
-django >= 6.0.0
-djangorestframework >= 3.0.0`"]
+django == 5.2.13
+djangorestframework == 3.17.1`"]
         AUTH_L1["`Auth &amp; Directory
 ldap3 >= 2.9  ·  Active Directory (LDAP)`"]
         LIBS_L1["`Libraries
 drf-spectacular  ·  drf-spectacular-sidecar  ·  django-cors-headers  ·  python-dotenv`"]
         INFRA_L1["`Infrastructure
 Python 3.14  ·  Windows Server 2022  ·  IIS  ·  HttpPlatformHandler  ·  Uvicorn`"]
-Python 3.14  ·  Windows Server 2022  ·  IIS  ·  wfastcgi`"]
     end
 
     subgraph DevToolchain["`Development Toolchain`"]
@@ -1141,8 +1139,10 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `ADMIN_AD_GROUP`         | Yes      | LDAP distinguished name  | —           | Active Directory group DN mapped to `app_admin`. |
 | `VIEWER_AD_GROUP`        | Yes      | LDAP distinguished name  | —           | Active Directory group DN mapped to `app_viewer`. |
 | `API_VERSION`            | No       | SemVer tag / build label | `APP_VERSION` | Application version surfaced by `/api/health/` and `drf-spectacular`; the tagged release pipeline replaces this placeholder with the release tag. |
-| `LDAP_SERVER_URI`        | iis only | LDAP URI                 | —           | LDAP server URI reserved for the real Active Directory group lookup implementation. |
-| `LDAP_BASE_DN`           | iis only | Distinguished name       | —           | Base DN reserved for the real Active Directory group membership search. |
+| `LDAP_SERVER_URI`        | iis only | LDAP URI                 | —           | Active Directory LDAP endpoint used at runtime for per-request group lookup. |
+| `LDAP_BASE_DN`           | iis only | Distinguished name       | —           | Base DN used for Active Directory group membership search. |
+| `LDAP_BIND_USER`         | Optional | Distinguished name / user | —          | Optional LDAP bind identity. Must be set together with `LDAP_BIND_PASSWORD`. |
+| `LDAP_BIND_PASSWORD`     | Optional | String                   | —           | Optional LDAP bind password. Must be set together with `LDAP_BIND_USER`. |
 | `LOG_LEVEL`              | No       | Python log level name    | `WARNING`   | Root logger level. Overrides the default for production tuning. |
 | `LOG_FORMAT`             | No       | `json`, `text`           | `text`      | Log output format. Use `json` in production for structured, machine-parseable output. |
 | `ALLOWED_HOSTS`          | Yes      | Comma-separated hosts    | —           | Django `ALLOWED_HOSTS` setting. |
@@ -1232,7 +1232,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     Enable HttpPlatformHandler to bridge IIS and the Django ASGI application:
 
     ```powershell
-    # No longer required: wfastcgi-enable
+    # HttpPlatformHandler should be installed and enabled at the IIS host level.
     ```
 
     This registers the Anaconda Python interpreter and Uvicorn as an ASGI handler in IIS via HttpPlatformHandler.
@@ -1254,14 +1254,13 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
     <configuration>
       <system.webServer>
         <handlers>
-          <add name="Python FastCGI"
-               path="*"
-               verb="*"
-               modules="FastCgiModule"
-               processPath="<conda-env-path>\python.exe"
-               arguments="-m uvicorn config.asgi:application --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%"
-               resourceType="Unspecified" />
+          <add name="httpPlatformHandler" path="*" verb="*" modules="httpPlatformHandler" resourceType="Unspecified" />
         </handlers>
+        <httpPlatform processPath="<conda-env-path>\python.exe"
+                      arguments="-m uvicorn config.asgi:application --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%"
+                      stdoutLogEnabled="true"
+                      stdoutLogFile=".\logs\uvicorn-stdout.log"
+                      startupTimeLimit="60" />
       </system.webServer>
       <appSettings>
         <!-- No longer required: <add key="ASGI_HANDLER" value="config.asgi.application" /> -->
@@ -1273,7 +1272,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
     Replace `<conda-env-path>` and `<backend-root-path>` with the actual paths.
 
-    **Sanity check:** Browse to `https://<server>/api/health/` from the server itself. It should return `{"status": "ok", "version": "APP_VERSION", "uptime_seconds": <number>}` before release tagging, and the tagged release pipeline should replace `APP_VERSION` with the release tag. If it errors, check the IIS logs and the Django error output in the `wfastcgi` logs.
+    **Sanity check:** Browse to `https://<server>/api/health/` from the server itself. It should return `{"status": "ok", "version": "APP_VERSION", "uptime_seconds": <number>}` before release tagging, and the tagged release pipeline should replace `APP_VERSION` with the release tag. If it errors, check IIS logs plus HttpPlatform/Uvicorn stdout-stderr logs.
 
 1. **Enable Windows Authentication**
 
@@ -1331,4 +1330,3 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 ---
 
 [**Back to Top**](#django-authentication--authorization)
-

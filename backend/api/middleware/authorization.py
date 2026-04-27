@@ -23,15 +23,17 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable
+from collections.abc import Awaitable
+from typing import Any, Callable, cast
+from urllib.parse import urlparse
 
+from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.http import HttpRequest, HttpResponse, JsonResponse
-from django.utils.decorators import sync_and_async_middleware
 from rest_framework.exceptions import AuthenticationFailed
 
 from django.conf import settings
-from ldap3 import Connection, Server, SUBTREE
+from ldap3 import SIMPLE, Connection, Server, SUBTREE
 from ldap3.utils.conv import escape_filter_chars
 
 from api.constants import AD_GROUP_TO_ROLE_MAP, ROLES
@@ -42,7 +44,6 @@ from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
 logger = logging.getLogger(__name__)
 
 
-@sync_and_async_middleware
 class AuthorizationMiddleware:
     """Enforces per-view authorization policies set by decorators.
 
@@ -51,24 +52,28 @@ class AuthorizationMiddleware:
     policy raise ``ImproperlyConfigured`` at request time.
     """
 
-    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+    def __init__(self, get_response: Callable[[HttpRequest], Any]) -> None:
         """Initialize the middleware.
 
         Args:
             get_response: The next middleware or view in the chain.
         """
         self.get_response = get_response
+        self.is_async = iscoroutinefunction(get_response)
+        if self.is_async:
+            markcoroutinefunction(self)
 
-    def __call__(self, request: HttpRequest) -> HttpResponse:
-        """Process the request and response.
+    def __call__(
+        self, request: HttpRequest
+    ) -> HttpResponse | Awaitable[HttpResponse]:
+        """Continue the request through sync or async middleware chains."""
+        if self.is_async:
+            return self.__acall__(request)
+        return cast(HttpResponse, self.get_response(request))
 
-        Args:
-            request: The HTTP request object.
-
-        Returns:
-            The HTTP response from the next middleware or view.
-        """
-        return self.get_response(request)
+    async def __acall__(self, request: HttpRequest) -> HttpResponse:
+        """Continue the request through the async middleware chain."""
+        return cast(HttpResponse, await self.get_response(request))
 
     def process_view(
         self,
@@ -265,10 +270,21 @@ def query_ldap_groups(username: str) -> list[str]:
 
     sam_account_name = username.split("\\")[-1] if "\\" in username else username
 
-    server = Server(settings.LDAP_SERVER_URI, use_ssl=True)
-    conn = Connection(server, auto_bind=True)
+    parsed = urlparse(settings.LDAP_SERVER_URI)
+    host = parsed.hostname or settings.LDAP_SERVER_URI
+    use_ssl = parsed.scheme == "ldaps"
+    server = Server(host, port=parsed.port, use_ssl=use_ssl)
+    bind_user = settings.LDAP_BIND_USER
+    bind_password = settings.LDAP_BIND_PASSWORD
+    conn_kwargs: dict[str, Any] = {"auto_bind": True}
+    if bind_user and bind_password:
+        conn_kwargs.update(
+            {"user": bind_user, "password": bind_password, "authentication": SIMPLE}
+        )
+    conn: Any | None = None
 
     try:
+        conn = Connection(server, **conn_kwargs)
         conn.search(
             search_base=settings.LDAP_BASE_DN,
             search_filter=f"(sAMAccountName={escape_filter_chars(sam_account_name)})",
@@ -281,5 +297,9 @@ def query_ldap_groups(username: str) -> list[str]:
             return []
 
         return list(conn.entries[0].memberOf.values)
+    except Exception:
+        logger.exception("LDAP lookup failed for %s", username)
+        return []
     finally:
-        conn.unbind()
+        if conn is not None:
+            conn.unbind()

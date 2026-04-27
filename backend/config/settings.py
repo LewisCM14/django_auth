@@ -134,10 +134,16 @@ LDAP_SERVER_URI: str = (
     validate_ldap_server_uri(LDAP_SERVER_URI_RAW) if LDAP_SERVER_URI_RAW else ""
 )
 LDAP_BASE_DN: str = validate_ldap_base_dn(LDAP_BASE_DN_RAW) if LDAP_BASE_DN_RAW else ""
+LDAP_BIND_USER: str = os.getenv("LDAP_BIND_USER", "").strip()
+LDAP_BIND_PASSWORD: str = os.getenv("LDAP_BIND_PASSWORD", "").strip()
 
 if AUTH_MODE == "iis" and (not LDAP_SERVER_URI or not LDAP_BASE_DN):
     raise ImproperlyConfigured(
         "LDAP_SERVER_URI and LDAP_BASE_DN are required when AUTH_MODE='iis'."
+    )
+if bool(LDAP_BIND_USER) ^ bool(LDAP_BIND_PASSWORD):
+    raise ImproperlyConfigured(
+        "LDAP_BIND_USER and LDAP_BIND_PASSWORD must either both be set or both be blank."
     )
 
 # Security headers and cookie flags are explicit so production deployments
@@ -213,7 +219,7 @@ LOG_LEVEL: str = validate_log_level(
 )
 
 
-# Logging is emitted to stderr so local runs and IIS/wfastcgi can capture the same stream.
+# Logging is emitted to stderr so local runs and IIS/HttpPlatformHandler can capture the same stream.
 LOGGING: dict[str, Any] = {
     "version": 1,
     "disable_existing_loggers": False,
