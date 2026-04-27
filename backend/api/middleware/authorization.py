@@ -62,9 +62,7 @@ class AuthorizationMiddleware:
         if self.is_async:
             markcoroutinefunction(self)
 
-    def __call__(
-        self, request: HttpRequest
-    ) -> HttpResponse | Awaitable[HttpResponse]:
+    def __call__(self, request: HttpRequest) -> HttpResponse | Awaitable[HttpResponse]:
         """Continue the request through sync or async middleware chains."""
         if self.is_async:
             return self.__acall__(request)

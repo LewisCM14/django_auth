@@ -23,11 +23,15 @@ class TestAsgiModule:
         wrapped_application = Mock(name="wrapped_staticfiles_app")
 
         with override_settings(DEBUG=True):
-            with patch(
-                "django.core.asgi.get_asgi_application", return_value=mock_application
-            ), patch(
-                "django.contrib.staticfiles.handlers.ASGIStaticFilesHandler",
-                return_value=wrapped_application,
+            with (
+                patch(
+                    "django.core.asgi.get_asgi_application",
+                    return_value=mock_application,
+                ),
+                patch(
+                    "django.contrib.staticfiles.handlers.ASGIStaticFilesHandler",
+                    return_value=wrapped_application,
+                ),
             ):
                 import config.asgi as asgi_module
 

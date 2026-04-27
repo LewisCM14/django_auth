@@ -19,9 +19,7 @@ class ContentSecurityPolicyMiddleware:
         if self.is_async:
             markcoroutinefunction(self)
 
-    def __call__(
-        self, request: HttpRequest
-    ) -> HttpResponse | Awaitable[HttpResponse]:
+    def __call__(self, request: HttpRequest) -> HttpResponse | Awaitable[HttpResponse]:
         """Attach CSP header in sync or async middleware chains."""
         if self.is_async:
             return self.__acall__(request)
