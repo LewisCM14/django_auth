@@ -28,6 +28,44 @@ def test_load_pywin32_modules_returns_none_when_packages_missing(
     assert authentication._load_pywin32_modules() is None
 
 
+def test_load_pywin32_modules_returns_none_when_security_package_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(authentication.sys, "platform", "win32")
+
+    def _find_spec(name: str) -> object | None:
+        if name == "win32api":
+            return object()
+        return None
+
+    monkeypatch.setattr(authentication.importlib.util, "find_spec", _find_spec)
+    assert authentication._load_pywin32_modules() is None
+
+
+def test_load_pywin32_modules_imports_modules_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(authentication.sys, "platform", "win32")
+    monkeypatch.setattr(
+        authentication.importlib.util,
+        "find_spec",
+        lambda _: object(),
+    )
+    fake_api = object()
+    fake_security = object()
+
+    def _fake_import_module(name: str) -> object:
+        if name == "win32api":
+            return fake_api
+        if name == "win32security":
+            return fake_security
+        raise AssertionError(f"unexpected module import: {name}")
+
+    monkeypatch.setattr(authentication.importlib, "import_module", _fake_import_module)
+
+    assert authentication._load_pywin32_modules() == (fake_api, fake_security)
+
+
 def test_resolve_handles_os_error_during_impersonation(monkeypatch: pytest.MonkeyPatch) -> None:
     resolver = authentication.WindowsAuthIdentityResolver()
 

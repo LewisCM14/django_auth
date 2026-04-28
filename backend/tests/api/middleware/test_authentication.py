@@ -81,7 +81,7 @@ class TestAuthenticationMiddlewareIISMode:
     @pytest.mark.django_db
     def test_iis_mode_reads_windows_auth_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         middleware = AuthenticationMiddleware(self.get_response)
-        monkeypatch.setattr(middleware.identity_resolver, "resolve", lambda _: "DOMAIN\\testuser")
+        monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: "DOMAIN\\testuser")
 
         request = Mock()
         request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
@@ -112,7 +112,7 @@ class TestAuthenticationMiddlewareIISMode:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         middleware = AuthenticationMiddleware(self.get_response)
-        monkeypatch.setattr(middleware.identity_resolver, "resolve", lambda _: "DOMAIN\\newuser")
+        monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: "DOMAIN\\newuser")
 
         request = Mock()
         request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
@@ -130,7 +130,7 @@ class TestAuthenticationMiddlewareIISMode:
     def test_iis_mode_reuses_existing_user(self, monkeypatch: pytest.MonkeyPatch) -> None:
         middleware = AuthenticationMiddleware(self.get_response)
         monkeypatch.setattr(
-            middleware.identity_resolver, "resolve", lambda _: "DOMAIN\\existinguser"
+            type(middleware.identity_resolver), "resolve", lambda _self, _token: "DOMAIN\\existinguser"
         )
         user, _ = User.objects.get_or_create(username="DOMAIN\\existinguser")
         original_pk = user.pk
@@ -149,7 +149,7 @@ class TestAuthenticationMiddlewareIISMode:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         middleware = AuthenticationMiddleware(self.get_response)
-        monkeypatch.setattr(middleware.identity_resolver, "resolve", lambda _: None)
+        monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: None)
         request = Mock()
         request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "not-a-valid-token"}
         request.user = None
@@ -165,7 +165,7 @@ class TestAuthenticationMiddlewareIISMode:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         middleware = AuthenticationMiddleware(self.get_response)
-        monkeypatch.setattr(middleware.identity_resolver, "resolve", lambda _: "DOMAIN\\bad/user")
+        monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: "DOMAIN\\bad/user")
         request = Mock()
         request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
         request.user = None
@@ -185,7 +185,7 @@ class TestAuthenticationMiddlewareIISMode:
     ) -> None:
         monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
         middleware = AuthenticationMiddleware(self.get_response)
-        monkeypatch.setattr(middleware.identity_resolver, "resolve", lambda _: "DOMAIN\\testuser")
+        monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: "DOMAIN\\testuser")
 
         request = Mock()
         request.path = "/api/user/"
@@ -217,7 +217,7 @@ class TestAuthenticationMiddlewareIISMode:
     ) -> None:
         monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
         middleware = AuthenticationMiddleware(self.get_response)
-        monkeypatch.setattr(middleware.identity_resolver, "resolve", lambda _: None)
+        monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: None)
 
         request = Mock()
         request.path = "/api/user/"
