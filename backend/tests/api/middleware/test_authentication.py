@@ -89,10 +89,10 @@ class TestAuthenticationMiddlewareIISMode:
         monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: "DOMAIN\\testuser")
 
         request = Mock()
-        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123", "REMOTE_ADDR": "127.0.0.1"}
         request.user = None
 
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
             middleware.process_request(request)
 
         assert request.user is not None
@@ -105,7 +105,7 @@ class TestAuthenticationMiddlewareIISMode:
         request.META = {}
         request.user = None
 
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
             middleware.process_request(request)
 
         assert request.user is not None
@@ -120,12 +120,12 @@ class TestAuthenticationMiddlewareIISMode:
         monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: "DOMAIN\\newuser")
 
         request = Mock()
-        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123", "REMOTE_ADDR": "127.0.0.1"}
         request.user = None
 
         User.objects.filter(username="DOMAIN\\newuser").delete()
 
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
             middleware.process_request(request)
 
         assert User.objects.filter(username="DOMAIN\\newuser").exists()
@@ -141,10 +141,10 @@ class TestAuthenticationMiddlewareIISMode:
         original_pk = user.pk
 
         request = Mock()
-        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123", "REMOTE_ADDR": "127.0.0.1"}
         request.user = None
 
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
             middleware.process_request(request)
 
         assert User.objects.filter(username="DOMAIN\\existinguser", pk=original_pk).exists()
@@ -156,10 +156,10 @@ class TestAuthenticationMiddlewareIISMode:
         middleware = AuthenticationMiddleware(self.get_response)
         monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: None)
         request = Mock()
-        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "not-a-valid-token"}
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "not-a-valid-token", "REMOTE_ADDR": "127.0.0.1"}
         request.user = None
 
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
             middleware.process_request(request)
 
         assert request.user is not None
@@ -172,10 +172,10 @@ class TestAuthenticationMiddlewareIISMode:
         middleware = AuthenticationMiddleware(self.get_response)
         monkeypatch.setattr(type(middleware.identity_resolver), "resolve", lambda _self, _token: "DOMAIN\\bad/user")
         request = Mock()
-        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123", "REMOTE_ADDR": "127.0.0.1"}
         request.user = None
 
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
             middleware.process_request(request)
 
         assert request.user is not None
@@ -196,12 +196,12 @@ class TestAuthenticationMiddlewareIISMode:
         request.path = "/api/user/"
         request.META = {
             "HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123",
-            "REMOTE_ADDR": "198.51.100.2",
+            "REMOTE_ADDR": "127.0.0.1",
             "HTTP_USER_AGENT": "pytest-agent",
         }
         request.user = None
 
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
             with caplog.at_level(logging.INFO, logger="api.middleware.authentication"):
                 middleware.process_request(request)
 
@@ -213,6 +213,20 @@ class TestAuthenticationMiddlewareIISMode:
         assert record.user_identifier == "DOMAIN\\testuser"
         assert record.action_attempted == "authenticate X-IIS-WindowsAuthToken"
         assert record.result == "success"
+
+
+    @override_settings(DEBUG=False)
+    def test_iis_mode_untrusted_source_ip_treated_anonymous(self) -> None:
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123", "REMOTE_ADDR": "198.51.100.10"}
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
+            middleware.process_request(request)
+
+        assert request.user is not None
+        assert not request.user.is_authenticated
 
     @override_settings(DEBUG=False)
     def test_iis_mode_logs_invalid_windows_auth_token(
@@ -228,12 +242,12 @@ class TestAuthenticationMiddlewareIISMode:
         request.path = "/api/user/"
         request.META = {
             "HTTP_X_IIS_WINDOWSAUTHTOKEN": "not-a-valid-token",
-            "REMOTE_ADDR": "198.51.100.2",
+            "REMOTE_ADDR": "127.0.0.1",
             "HTTP_USER_AGENT": "pytest-agent",
         }
         request.user = None
 
-        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}):
             with caplog.at_level(logging.WARNING, logger="api.middleware.authentication"):
                 middleware.process_request(request)
 
@@ -251,7 +265,14 @@ class TestWindowsAuthIdentityResolver:
 
     @pytest.mark.parametrize(
         ("token", "expected"),
-        [("0x10", 16), ("10", 16), ("", None), ("not-hex", None)],
+        [
+            ("0x10", 16),
+            ("10", 16),
+            ("0", None),
+            ("", None),
+            ("-1", None),
+            ("not-hex", None),
+        ],
     )
     def test_parse_token_handle(self, token: str, expected: int | None) -> None:
         assert authentication._parse_token_handle(token) == expected

@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import logging
 import os
+import ssl
+from urllib.parse import urlparse
 from collections.abc import Awaitable
 from typing import Any, Callable, cast
 
@@ -32,7 +34,7 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from rest_framework.exceptions import AuthenticationFailed
 
 from django.conf import settings
-from ldap3 import Connection, Server, SUBTREE
+from ldap3 import Connection, Server, SUBTREE, Tls
 from ldap3.utils.conv import escape_filter_chars
 
 from api.constants import AD_GROUP_TO_ROLE_MAP, ROLES
@@ -267,8 +269,16 @@ def query_ldap_groups(username: str) -> list[str]:
 
     sam_account_name = username.split("\\")[-1] if "\\" in username else username
 
-    server = Server(settings.LDAP_SERVER_URI, use_ssl=True)
-    conn = Connection(server, auto_bind=True)
+    parsed_uri = urlparse(settings.LDAP_SERVER_URI)
+    use_ssl = parsed_uri.scheme == "ldaps"
+    tls_config = Tls(validate=ssl.CERT_REQUIRED) if use_ssl else None
+    server = Server(
+        settings.LDAP_SERVER_URI,
+        use_ssl=use_ssl,
+        tls=tls_config,
+        connect_timeout=3,
+    )
+    conn = Connection(server, auto_bind=True, receive_timeout=3)
 
     try:
         conn.search(
