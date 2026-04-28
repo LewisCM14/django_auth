@@ -12,12 +12,16 @@ Role resolution happens only when a view requires roles:
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
+from collections.abc import Coroutine
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
+from django.http import HttpResponse
 from django.test import override_settings
 
 from api.constants import ADMIN_AD_GROUP, ROLE_ADMIN, ROLE_VIEWER, VIEWER_AD_GROUP
@@ -874,3 +878,35 @@ class TestAuthorizationMiddlewareErrorResponseShape:
         assert result.status_code == 500
         body = json.loads(result.content)
         assert "secret internal detail" not in json.dumps(body)
+
+
+class TestAuthorizationMiddlewareAsyncCompatibility:
+    """Async compatibility coverage for authorization middleware."""
+
+    def test_supports_async_get_response(self) -> None:
+        """Authorization middleware awaits async downstream responses."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=202)
+
+        middleware = AuthorizationMiddleware(get_response)
+        request = Mock()
+
+        response = asyncio.run(middleware.__acall__(request))
+
+        assert response.status_code == 202
+
+    def test_call_returns_coroutine_in_async_mode(self) -> None:
+        """Authorization middleware __call__ uses async path when required."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=206)
+
+        middleware = AuthorizationMiddleware(get_response)
+        request = Mock()
+
+        result = middleware(request)
+        assert inspect.isawaitable(result)
+        response = asyncio.run(cast(Coroutine[Any, Any, HttpResponse], result))
+
+        assert response.status_code == 206

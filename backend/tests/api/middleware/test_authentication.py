@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
+from collections.abc import Coroutine
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
 from django.contrib.auth.models import User
 from django.core.exceptions import ImproperlyConfigured
+from django.http import HttpResponse
 from django.http import HttpRequest
 from django.test import override_settings
 
@@ -367,3 +371,52 @@ class TestWindowsAuthIdentityResolver:
     def test_resolve_returns_none_for_blank_header(self) -> None:
         resolver = authentication.WindowsAuthIdentityResolver()
         assert resolver.resolve("  ") is None
+
+
+class TestAuthenticationMiddlewareAsyncCompatibility:
+    """Async compatibility coverage for authentication middleware."""
+
+    @pytest.mark.django_db
+    def test_supports_async_get_response(self) -> None:
+        """Authentication middleware handles async chains end-to-end."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=204)
+
+        middleware = AuthenticationMiddleware(get_response)
+        request = Mock()
+        request.META = {}
+        request.user = None
+
+        with patch.dict(
+            "os.environ", {"AUTH_MODE": "dev", "DEV_USER_IDENTITY": "dev_async_user"}
+        ):
+            response = asyncio.run(middleware.__acall__(request))
+
+        assert response.status_code == 204
+        assert request.user is not None
+        assert request.user.username == "dev_async_user"
+
+    @pytest.mark.django_db
+    def test_call_returns_coroutine_in_async_mode(self) -> None:
+        """__call__ returns awaitable when middleware is wired into async chain."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=205)
+
+        middleware = AuthenticationMiddleware(get_response)
+        request = Mock()
+        request.META = {}
+        request.user = None
+
+        with patch.dict(
+            "os.environ",
+            {"AUTH_MODE": "dev", "DEV_USER_IDENTITY": "dev_async_call_user"},
+        ):
+            result = middleware(request)
+            assert inspect.isawaitable(result)
+            response = asyncio.run(cast(Coroutine[Any, Any, HttpResponse], result))
+
+        assert response.status_code == 205
+        assert request.user is not None
+        assert request.user.username == "dev_async_call_user"

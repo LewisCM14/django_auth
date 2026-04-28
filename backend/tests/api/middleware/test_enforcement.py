@@ -13,11 +13,15 @@ raises ``ImproperlyConfigured`` at request time.
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import inspect
+from collections.abc import Coroutine
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
+from django.http import HttpResponse
 
 from api.middleware.enforcement import DecoratorEnforcementMiddleware
 
@@ -179,3 +183,35 @@ class TestDecoratorEnforcement:
 
         assert middleware._has_view_attr(fbv, "_cache_policy") is True
         assert middleware._has_view_attr(fbv, "_throttle_rate") is False
+
+
+class TestDecoratorEnforcementAsyncCompatibility:
+    """Async compatibility coverage for decorator enforcement middleware."""
+
+    def test_supports_async_get_response(self) -> None:
+        """Decorator enforcement middleware awaits async downstream responses."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=203)
+
+        middleware = DecoratorEnforcementMiddleware(get_response)
+        request = Mock()
+
+        response = asyncio.run(middleware.__acall__(request))
+
+        assert response.status_code == 203
+
+    def test_call_returns_coroutine_in_async_mode(self) -> None:
+        """Decorator enforcement middleware __call__ uses async path."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=207)
+
+        middleware = DecoratorEnforcementMiddleware(get_response)
+        request = Mock()
+
+        result = middleware(request)
+        assert inspect.isawaitable(result)
+        response = asyncio.run(cast(Coroutine[Any, Any, HttpResponse], result))
+
+        assert response.status_code == 207
