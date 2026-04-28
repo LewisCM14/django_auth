@@ -44,7 +44,7 @@ def _make_roles_view(
     # Django's as_view() dynamically attaches view_class to the callable at
     # runtime. We replicate that here so the middleware resolves policy/roles
     # from the class. All 'attr-defined' ignores in this file are the same pattern.
-    wrapped_view.view_class = RolesView  # type: ignore[attr-defined]
+    wrapped_view.view_class = RolesView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
     return wrapped_view
 
 
@@ -293,7 +293,7 @@ class TestAuthorizationMiddlewareIISMode:
 
         # Django's URL resolver attaches `view_class` dynamically to the callable
         # returned by `as_view()`. In tests we emulate that runtime shape.
-        wrapped_view.view_class = PublicView  # type: ignore[attr-defined]
+        wrapped_view.view_class = PublicView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             result = middleware.process_view(request, wrapped_view, [], {})
@@ -318,7 +318,7 @@ class TestAuthorizationMiddlewareIISMode:
             return None
 
         # Emulates Django's as_view() runtime attachment (see _make_roles_view).
-        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
+        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
@@ -345,7 +345,7 @@ class TestAuthorizationMiddlewareIISMode:
             return None
 
         # Emulates Django's as_view() runtime attachment (see _make_roles_view).
-        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
+        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             result = middleware.process_view(request, wrapped_view, [], {})
@@ -371,7 +371,7 @@ class TestAuthorizationMiddlewareIISMode:
 
         # Mirrors Django's runtime behavior where `as_view()` callables carry
         # a dynamically attached `view_class` attribute.
-        wrapped_view.view_class = UndecoratedView  # type: ignore[attr-defined]
+        wrapped_view.view_class = UndecoratedView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         from django.core.exceptions import ImproperlyConfigured
 
@@ -416,7 +416,7 @@ class TestAuthorizationMiddlewareIISMode:
 
         # Mirrors Django's runtime behavior where `as_view()` callables carry
         # a dynamically attached `view_class` attribute.
-        wrapped_view.view_class = MisconfiguredRolesView  # type: ignore[attr-defined]
+        wrapped_view.view_class = MisconfiguredRolesView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = [ADMIN_AD_GROUP]
@@ -447,7 +447,7 @@ class TestAuthorizationMiddlewareIISMode:
 
         # Mirrors Django's runtime behavior where `as_view()` callables carry
         # a dynamically attached `view_class` attribute.
-        wrapped_view.view_class = UnknownPolicyView  # type: ignore[attr-defined]
+        wrapped_view.view_class = UnknownPolicyView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             from django.core.exceptions import ImproperlyConfigured
@@ -653,7 +653,7 @@ class TestAuthorizationMiddlewareHelpers:
             return None
 
         # Simulates @authz_public setting the attribute directly on a FBV.
-        fbv.authz_policy = "public"  # type: ignore[attr-defined]
+        fbv.authz_policy = "public"  # type: ignore[attr-defined]  # Simulates decorator-injected function metadata used by middleware resolution.
 
         assert middleware._get_view_attr(fbv, AUTHZ_POLICY_ATTR, str) == "public"
 
@@ -665,7 +665,7 @@ class TestAuthorizationMiddlewareHelpers:
             return None
 
         # Simulates @authz_roles setting the attribute directly on a FBV.
-        fbv.authz_roles = (ROLE_ADMIN,)  # type: ignore[attr-defined]
+        fbv.authz_roles = (ROLE_ADMIN,)  # type: ignore[attr-defined]  # Simulates decorator-injected function metadata used by middleware resolution.
 
         assert middleware._get_view_attr(fbv, AUTHZ_ROLES_ATTR, tuple) == (ROLE_ADMIN,)
 

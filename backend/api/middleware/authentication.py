@@ -155,7 +155,7 @@ class AuthenticationMiddleware:
         auth_mode = os.getenv("AUTH_MODE", "iis")
         anonymous_user = AnonymousUser()
         request.user = anonymous_user
-        request._cached_user = anonymous_user  # type: ignore[attr-defined]
+        request._cached_user = anonymous_user  # type: ignore[attr-defined]  # Django attaches _cached_user dynamically; HttpRequest stubs do not declare it.
 
         if auth_mode == "dev":
             self._authenticate_dev_user(request)
@@ -184,7 +184,7 @@ class AuthenticationMiddleware:
             )
         user, _ = User.objects.get_or_create(username=dev_user_identity)
         request.user = user
-        request._cached_user = user  # type: ignore[attr-defined]
+        request._cached_user = user  # type: ignore[attr-defined]  # Django attaches _cached_user dynamically; HttpRequest stubs do not declare it.
         logger.info(
             "authentication succeeded",
             extra=build_security_event_fields(
@@ -217,7 +217,7 @@ class AuthenticationMiddleware:
                 ),
             )
             request.user = anonymous_user
-            request._cached_user = anonymous_user  # type: ignore[attr-defined]
+            request._cached_user = anonymous_user  # type: ignore[attr-defined]  # Django attaches _cached_user dynamically; HttpRequest stubs do not declare it.
             return
 
         try:
@@ -234,12 +234,12 @@ class AuthenticationMiddleware:
                 ),
             )
             request.user = anonymous_user
-            request._cached_user = anonymous_user  # type: ignore[attr-defined]
+            request._cached_user = anonymous_user  # type: ignore[attr-defined]  # Django attaches _cached_user dynamically; HttpRequest stubs do not declare it.
             return
 
         user, _ = User.objects.get_or_create(username=remote_user)
         request.user = user
-        request._cached_user = user  # type: ignore[attr-defined]
+        request._cached_user = user  # type: ignore[attr-defined]  # Django attaches _cached_user dynamically; HttpRequest stubs do not declare it.
         logger.info(
             "authentication succeeded",
             extra=build_security_event_fields(
