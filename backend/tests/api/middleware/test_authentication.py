@@ -351,3 +351,37 @@ class TestAuthenticationMiddlewareIISMode:
         assert record.result == "failure"
         assert record.source_ip == "198.51.100.2"
         assert record.user_agent == "pytest-agent"
+
+    @override_settings(DEBUG=False)
+    def test_iis_mode_logs_windows_auth_token_without_x_remote_user(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Forwarded IIS token without X-Remote-User logs a clear diagnostic warning."""
+        monkeypatch.setattr(logging.getLogger("api"), "propagate", True)
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.path = "/api/user/"
+        request.META = {
+            "HTTP_X_IIS_WINDOWSAUTHTOKEN": "token-handle",
+            "REMOTE_ADDR": "198.51.100.2",
+            "HTTP_USER_AGENT": "pytest-agent",
+        }
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            with caplog.at_level(logging.WARNING, logger="api.middleware.authentication"):
+                middleware.process_request(request)
+
+        record = cast(
+            Any,
+            next(
+                r
+                for r in caplog.records
+                if r.name == "api.middleware.authentication"
+                and r.msg.startswith("X-IIS-WindowsAuthToken received")
+            ),
+        )
+        assert record.event_type == "AUTHENTICATION_FAILURE"
+        assert record.user_identifier == "anonymous"
+        assert record.action_attempted == "authenticate X-Remote-User"
+        assert record.result == "failure"

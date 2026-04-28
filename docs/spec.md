@@ -1274,7 +1274,7 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
 1. **Enable Windows Authentication**
 
-    Configure Windows Authentication on the IIS site so that IIS injects the `REMOTE_USER` header:
+    Configure Windows Authentication on the IIS site so authenticated requests can be mapped to `X-Remote-User`:
 
     - In IIS Manager, select the site → **Authentication**.
     - **Disable** Anonymous Authentication.
@@ -1282,7 +1282,32 @@ Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TL
 
     Ensure the application pool identity has read access to the backend directory.
 
-    > **Note:** With Anonymous Authentication disabled, IIS will challenge *all* requests, including `/api/health/`. The health endpoint is marked `@authz_public` at the Django layer (no `REMOTE_USER` or role required), but IIS will still require Windows Authentication before the request reaches Django. If load balancers or uptime monitors cannot authenticate via Kerberos/NTLM, consider configuring an IIS URL Authorization rule to allow anonymous access to `/api/health/` only.
+    > **Note:** With Anonymous Authentication disabled, IIS will challenge *all* requests, including `/api/health/`. The health endpoint is marked `@authz_public` at the Django layer (no `X-Remote-User` or role required), but IIS will still require Windows Authentication before the request reaches Django. If load balancers or uptime monitors cannot authenticate via Kerberos/NTLM, consider configuring an IIS URL Authorization rule to allow anonymous access to `/api/health/` only.
+
+1. **Inject `X-Remote-User` for the upstream ASGI process**
+
+    When using HttpPlatformHandler, do **not** rely on `forwardWindowsAuthToken` for Django identity; that setting forwards an opaque Windows token handle (`X-IIS-WindowsAuthToken`), not a username string.
+
+    Instead, set a trusted server variable/header from IIS-authenticated identity (for example `LOGON_USER`) and strip any client-supplied `X-Remote-User` value before setting the internal value.
+
+    ```xml
+    <rewrite>
+      <allowedServerVariables>
+        <add name="HTTP_X_REMOTE_USER" />
+      </allowedServerVariables>
+      <rules>
+        <rule name="Set X-Remote-User from Windows auth" stopProcessing="true">
+          <match url="(.*)" />
+          <serverVariables>
+            <set name="HTTP_X_REMOTE_USER" value="{LOGON_USER}" />
+          </serverVariables>
+          <action type="None" />
+        </rule>
+      </rules>
+    </rewrite>
+    ```
+
+    Validate the exact server variable behavior in your estate; module ordering can differ by environment. If `LOGON_USER` is still anonymous/empty at rewrite time, use an IIS-native auth propagation approach instead of URL Rewrite.
 
     **Sanity check:** Browse to `https://<server>/api/user/` from a domain-joined machine. The browser should negotiate Kerberos/NTLM silently and return a `200` with the user's `username` and `roles`. If you receive a `401`, check that Windows Authentication is enabled and Anonymous is disabled. If you receive a `403`, confirm the user is a member of a configured AD group.
 
