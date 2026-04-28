@@ -11,9 +11,11 @@ import contextvars
 import logging
 import time
 import uuid
+from collections.abc import Awaitable
+from typing import Any, Callable, cast
 
+from asgiref.sync import iscoroutinefunction, markcoroutinefunction, sync_to_async
 from django.http import HttpRequest, HttpResponse
-from django.utils.deprecation import MiddlewareMixin
 
 from api.request_user import get_request_user
 from api.security_logging import build_security_event_fields
@@ -50,7 +52,7 @@ class RequestIdFilter(logging.Filter):
         return True
 
 
-class RequestIdMiddleware(MiddlewareMixin):
+class RequestIdMiddleware:
     """Middleware that generates and tracks unique request IDs.
 
     Generates a UUID4 for each request and attaches it to:
@@ -60,6 +62,29 @@ class RequestIdMiddleware(MiddlewareMixin):
 
     This enables distributed tracing and debugging across logs.
     """
+
+    def __init__(self, get_response: Callable[[HttpRequest], Any]) -> None:
+        """Initialize middleware and detect sync vs async request chain."""
+        self.get_response = get_response
+        self.is_async = iscoroutinefunction(get_response)
+        if self.is_async:
+            markcoroutinefunction(self)
+
+    def __call__(self, request: HttpRequest) -> HttpResponse | Awaitable[HttpResponse]:
+        """Dispatch request handling for sync or async middleware chains."""
+        if self.is_async:
+            return self.__acall__(request)
+        self.process_request(request)
+        response = cast(HttpResponse, self.get_response(request))
+        return self.process_response(request, response)
+
+    async def __acall__(self, request: HttpRequest) -> HttpResponse:
+        """Execute sync request-id bookkeeping around async downstream middleware."""
+        await sync_to_async(self.process_request, thread_sensitive=True)(request)
+        response = cast(HttpResponse, await self.get_response(request))
+        return await sync_to_async(self.process_response, thread_sensitive=True)(
+            request, response
+        )
 
     def process_request(self, request: HttpRequest) -> None:
         """Generate request ID, attach to request object, and set context variable.

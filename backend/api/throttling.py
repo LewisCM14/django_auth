@@ -31,7 +31,7 @@ THROTTLE_RATE_ATTR = "_throttle_rate"
 
 
 class RemoteUserRateThrottle(SimpleRateThrottle):
-    """Per-view rate throttle keyed on authenticated REMOTE_USER identity.
+    """Per-view rate throttle keyed on authenticated user identity.
 
     This project authenticates users in middleware rather than via DRF's
     authentication system.  The cache key is derived from ``request.user``
@@ -63,7 +63,7 @@ class RemoteUserRateThrottle(SimpleRateThrottle):
         return super().allow_request(cast(Request, request), view)
 
     def get_cache_key(self, request: Request, view: Any) -> str | None:
-        """Build cache key using REMOTE_USER identity or client IP.
+        """Build cache key using Windows-authenticated identity or client IP.
 
         Args:
             request: Incoming HTTP request.

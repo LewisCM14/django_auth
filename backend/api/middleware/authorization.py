@@ -113,7 +113,7 @@ class AuthorizationMiddleware:
                 user_roles = self._get_user_roles(username)
                 # Django's User model has no 'roles' attribute; we attach it
                 # dynamically so the view can read resolved roles from the request.
-                request.user.roles = user_roles  # type: ignore[union-attr]
+                request.user.roles = user_roles  # type: ignore[union-attr]  # User roles are attached dynamically for downstream views; Django user stubs do not define this extension field.
 
                 required_roles: tuple[str, ...] = (
                     self._get_view_attr(view_func, AUTHZ_ROLES_ATTR, tuple) or ()

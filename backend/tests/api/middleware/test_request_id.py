@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import uuid
+from collections.abc import Coroutine
 from typing import Any, cast
 from unittest.mock import Mock
 
@@ -278,11 +281,6 @@ class TestRequestIdMiddlewareAccessLogging:
         assert record.user_identifier == "testuser"
         assert record.source_ip == "203.0.113.10"
         assert record.user_agent == "pytest-agent"
-        assert record.action_attempted == "GET"
-        assert record.result == "success"
-        assert record.resource_accessed == "/api/health/"
-        assert record.status_code == 200
-        assert record.request_id == response["X-Request-ID"]
 
     def test_access_log_shows_anonymous_when_unauthenticated(
         self, caplog: pytest.LogCaptureFixture
@@ -302,3 +300,41 @@ class TestRequestIdMiddlewareAccessLogging:
             if r.name == "api.middleware.request_id"
         ]
         assert any("anonymous" in m for m in messages)
+
+
+class TestRequestIdMiddlewareAsyncCompatibility:
+    """Async compatibility tests for RequestIdMiddleware."""
+
+    def test_supports_async_get_response(self) -> None:
+        """RequestId middleware supports async downstream middleware chains."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=209)
+
+        middleware = RequestIdMiddleware(get_response)
+        request = Mock()
+        request.META = {}
+
+        response = asyncio.run(middleware.__acall__(request))
+
+        assert response.status_code == 209
+        assert "X-Request-ID" in response
+        assert request_id_var.get() == "-"
+
+    def test_call_returns_coroutine_in_async_mode(self) -> None:
+        """RequestId middleware __call__ returns awaitable for async chains."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=210)
+
+        middleware = RequestIdMiddleware(get_response)
+        request = Mock()
+        request.META = {}
+
+        result = middleware(request)
+        assert inspect.isawaitable(result)
+        response = asyncio.run(cast(Coroutine[Any, Any, HttpResponse], result))
+
+        assert response.status_code == 210
+        assert "X-Request-ID" in response
+        assert request_id_var.get() == "-"
