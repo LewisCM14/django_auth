@@ -338,3 +338,38 @@ class TestRequestIdMiddlewareAsyncCompatibility:
         assert response.status_code == 210
         assert "X-Request-ID" in response
         assert request_id_var.get() == "-"
+
+    def test_sync_path_resets_context_when_downstream_raises(self) -> None:
+        """Sync chain clears request_id_var before propagating downstream errors."""
+
+        def get_response(request: Any) -> HttpResponse:
+            raise RuntimeError("downstream boom")
+
+        middleware = RequestIdMiddleware(get_response)
+        request = Mock()
+        request.META = {}
+        request_id_var.set("-")
+
+        with pytest.raises(RuntimeError, match="downstream boom"):
+            middleware(request)
+
+        assert request_id_var.get() == "-"
+
+    def test_async_path_resets_context_when_downstream_raises(self) -> None:
+        """Async chain clears request_id_var before propagating downstream errors."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            raise RuntimeError("async downstream boom")
+
+        middleware = RequestIdMiddleware(get_response)
+        request = Mock()
+        request.META = {}
+        request_id_var.set("-")
+
+        result = middleware(request)
+        assert inspect.isawaitable(result)
+
+        with pytest.raises(RuntimeError, match="async downstream boom"):
+            asyncio.run(cast(Coroutine[Any, Any, HttpResponse], result))
+
+        assert request_id_var.get() == "-"

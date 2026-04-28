@@ -75,13 +75,25 @@ class RequestIdMiddleware:
         if self.is_async:
             return self.__acall__(request)
         self.process_request(request)
-        response = cast(HttpResponse, self.get_response(request))
+        try:
+            response = cast(HttpResponse, self.get_response(request))
+        except Exception:
+            # Fail closed and clear correlation context to avoid leaking stale IDs
+            # into unrelated work after exception propagation.
+            request_id_var.set("-")
+            raise
         return self.process_response(request, response)
 
     async def __acall__(self, request: HttpRequest) -> HttpResponse:
         """Execute sync request-id bookkeeping around async downstream middleware."""
         await sync_to_async(self.process_request, thread_sensitive=True)(request)
-        response = cast(HttpResponse, await self.get_response(request))
+        try:
+            response = cast(HttpResponse, await self.get_response(request))
+        except Exception:
+            # Fail closed and clear correlation context to avoid leaking stale IDs
+            # into unrelated work after exception propagation.
+            request_id_var.set("-")
+            raise
         return await sync_to_async(self.process_response, thread_sensitive=True)(
             request, response
         )
