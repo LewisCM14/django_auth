@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import logging
 import os
+import ssl
+from urllib.parse import urlparse
 from collections.abc import Awaitable
 from typing import Any, Callable, cast
 
@@ -32,7 +34,7 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from rest_framework.exceptions import AuthenticationFailed
 
 from django.conf import settings
-from ldap3 import Connection, Server, SUBTREE
+from ldap3 import Connection, Server, SUBTREE, Tls
 from ldap3.utils.conv import escape_filter_chars
 
 from api.constants import AD_GROUP_TO_ROLE_MAP, ROLES
@@ -41,6 +43,12 @@ from api.security_logging import build_security_event_fields
 from api.permissions import AUTHZ_POLICY_ATTR, AUTHZ_ROLES_ATTR
 
 logger = logging.getLogger(__name__)
+
+AUTHZ_ERROR_DETAILS: dict[int, str] = {
+    401: "Authentication credentials were not provided.",
+    403: "You do not have permission to perform this action.",
+    500: "An unexpected error occurred.",
+}
 
 
 class AuthorizationMiddleware:
@@ -100,36 +108,8 @@ class AuthorizationMiddleware:
                     "using @authz_public, @authz_authenticated, or @authz_roles(...)."
                 )
 
-            if policy == "public":
-                return None
-
-            if policy == "authenticated":
-                self._ensure_authenticated(request)
-                return None
-
-            if policy == "roles":
-                self._ensure_authenticated(request)
-                username = self._get_authenticated_username(request)
-                user_roles = self._get_user_roles(username)
-                # Django's User model has no 'roles' attribute; we attach it
-                # dynamically so the view can read resolved roles from the request.
-                request.user.roles = user_roles  # type: ignore[union-attr]
-
-                required_roles: tuple[str, ...] = (
-                    self._get_view_attr(view_func, AUTHZ_ROLES_ATTR, tuple) or ()
-                )
-                if not required_roles:
-                    raise ImproperlyConfigured(
-                        "@authz_roles decorator requires at least one role."
-                    )
-
-                if not any(role in user_roles for role in required_roles):
-                    raise PermissionDenied(
-                        "User is not a member of any required application roles."
-                    )
-                return None
-
-            raise ImproperlyConfigured(f"Unknown authz policy '{policy}'.")
+            self._enforce_policy(policy, request, view_func)
+            return None
         except AuthenticationFailed:
             logger.warning(
                 "authentication failed",
@@ -142,13 +122,7 @@ class AuthorizationMiddleware:
                     status_code=401,
                 ),
             )
-            return JsonResponse(
-                {
-                    "detail": "Authentication credentials were not provided.",
-                    "request_id": request_id_var.get(),
-                },
-                status=401,
-            )
+            return self._error_response(401)
         except PermissionDenied:
             username = getattr(request.user, "username", None) or "anonymous"
             logger.warning(
@@ -162,13 +136,7 @@ class AuthorizationMiddleware:
                     status_code=403,
                 ),
             )
-            return JsonResponse(
-                {
-                    "detail": "You do not have permission to perform this action.",
-                    "request_id": request_id_var.get(),
-                },
-                status=403,
-            )
+            return self._error_response(403)
         except ImproperlyConfigured:
             raise
         except Exception as exc:
@@ -183,13 +151,51 @@ class AuthorizationMiddleware:
                     exception_type=exc.__class__.__name__,
                 ),
             )
-            return JsonResponse(
-                {
-                    "detail": "An unexpected error occurred.",
-                    "request_id": request_id_var.get(),
-                },
-                status=500,
+            return self._error_response(500)
+
+    def _enforce_policy(
+        self, policy: str, request: HttpRequest, view_func: Any
+    ) -> None:
+        """Apply the authorization flow for one resolved policy value."""
+        if policy == "public":
+            return
+
+        if policy == "authenticated":
+            self._ensure_authenticated(request)
+            return
+
+        if policy == "roles":
+            self._ensure_authenticated(request)
+            username = self._get_authenticated_username(request)
+            user_roles = self._get_user_roles(username)
+            request.user.roles = user_roles  # type: ignore[union-attr]  # User roles are attached dynamically for downstream views; Django user stubs do not define this extension field.
+            required_roles = self._required_roles(view_func)
+            if not any(role in user_roles for role in required_roles):
+                raise PermissionDenied(
+                    "User is not a member of any required application roles."
+                )
+            return
+
+        raise ImproperlyConfigured(f"Unknown authz policy '{policy}'.")
+
+    def _required_roles(self, view_func: Any) -> tuple[str, ...]:
+        """Return roles declared by @authz_roles and fail closed when empty."""
+        required_roles: tuple[str, ...] = (
+            self._get_view_attr(view_func, AUTHZ_ROLES_ATTR, tuple) or ()
+        )
+        if not required_roles:
+            raise ImproperlyConfigured(
+                "@authz_roles decorator requires at least one role."
             )
+        return required_roles
+
+    def _error_response(self, status_code: int) -> JsonResponse:
+        """Build a standardized JSON error envelope with request correlation."""
+        detail = AUTHZ_ERROR_DETAILS[status_code]
+        return JsonResponse(
+            {"detail": detail, "request_id": request_id_var.get()},
+            status=status_code,
+        )
 
     def _get_view_attr(self, view_func: Any, attr: str, expected_type: type) -> Any:
         """Read a decorator attribute from a view function or its view_class."""
@@ -267,8 +273,16 @@ def query_ldap_groups(username: str) -> list[str]:
 
     sam_account_name = username.split("\\")[-1] if "\\" in username else username
 
-    server = Server(settings.LDAP_SERVER_URI, use_ssl=True)
-    conn = Connection(server, auto_bind=True)
+    parsed_uri = urlparse(settings.LDAP_SERVER_URI)
+    use_ssl = parsed_uri.scheme == "ldaps"
+    tls_config = Tls(validate=ssl.CERT_REQUIRED) if use_ssl else None
+    server = Server(
+        settings.LDAP_SERVER_URI,
+        use_ssl=use_ssl,
+        tls=tls_config,
+        connect_timeout=3,
+    )
+    conn = Connection(server, auto_bind=True, receive_timeout=3)
 
     try:
         conn.search(

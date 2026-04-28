@@ -25,6 +25,24 @@ from api.caching import CACHE_POLICY_ATTR
 from api.permissions import AUTHZ_POLICY_ATTR
 from api.throttling import THROTTLE_RATE_ATTR
 
+REQUIRED_VIEW_ATTRS: tuple[tuple[str, str], ...] = (
+    (
+        THROTTLE_RATE_ATTR,
+        "Every view in api.views must declare a rate limit using "
+        "@throttle('rate') or @throttle_exempt.",
+    ),
+    (
+        CACHE_POLICY_ATTR,
+        "Every view in api.views must declare a cache policy using "
+        "@cache_public, @cache_private, or @cache_disabled.",
+    ),
+    (
+        AUTHZ_POLICY_ATTR,
+        "Every view in api.views must declare an authorization policy "
+        "using @authz_public, @authz_authenticated, or @authz_roles(...).",
+    ),
+)
+
 
 class DecoratorEnforcementMiddleware:
     """Enforce that every project view declares all required decorators.
@@ -81,23 +99,9 @@ class DecoratorEnforcementMiddleware:
                 "third-party endpoints through wrapper views in api.views."
             )
 
-        if not self._has_view_attr(view_func, THROTTLE_RATE_ATTR):
-            raise ImproperlyConfigured(
-                "Every view in api.views must declare a rate limit using "
-                "@throttle('rate') or @throttle_exempt."
-            )
-
-        if not self._has_view_attr(view_func, CACHE_POLICY_ATTR):
-            raise ImproperlyConfigured(
-                "Every view in api.views must declare a cache policy using "
-                "@cache_public, @cache_private, or @cache_disabled."
-            )
-
-        if not self._has_view_attr(view_func, AUTHZ_POLICY_ATTR):
-            raise ImproperlyConfigured(
-                "Every view in api.views must declare an authorization policy "
-                "using @authz_public, @authz_authenticated, or @authz_roles(...)."
-            )
+        for required_attr, error_message in REQUIRED_VIEW_ATTRS:
+            if not self._has_view_attr(view_func, required_attr):
+                raise ImproperlyConfigured(error_message)
 
     def _is_project_view(self, view_func: Any | None) -> bool:
         """Return True when the resolved view belongs to api.views."""

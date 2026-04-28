@@ -18,6 +18,7 @@ from api.validation import (
     validate_allowed_hosts,
     validate_api_version,
     validate_cors_allowed_origins,
+    validate_ip_allowlist,
     validate_ldap_base_dn,
     validate_ldap_server_uri,
     validate_log_format,
@@ -140,12 +141,25 @@ if AUTH_MODE == "iis" and (not LDAP_SERVER_URI or not LDAP_BASE_DN):
         "LDAP_SERVER_URI and LDAP_BASE_DN are required when AUTH_MODE='iis'."
     )
 
+TRUSTED_AUTH_PROXY_IPS_RAW: str = os.getenv(
+    "TRUSTED_AUTH_PROXY_IPS", "127.0.0.1"
+).strip()
+TRUSTED_AUTH_PROXY_IPS: list[str] = validate_ip_allowlist(
+    TRUSTED_AUTH_PROXY_IPS_RAW, field_name="TRUSTED_AUTH_PROXY_IPS"
+)
+if AUTH_MODE == "iis" and not TRUSTED_AUTH_PROXY_IPS:
+    raise ImproperlyConfigured(
+        "TRUSTED_AUTH_PROXY_IPS is required when AUTH_MODE='iis'."
+    )
+
 # Security headers and cookie flags are explicit so production deployments
 # remain hardened even if the hosting layer omits defaults.
 SECURE_PROXY_SSL_HEADER: tuple[str, str] | None = (
     ("HTTP_X_FORWARDED_PROTO", "https") if AUTH_MODE == "iis" else None
 )
-SECURE_SSL_REDIRECT: bool = False
+SECURE_SSL_REDIRECT: bool = (
+    os.getenv("SECURE_SSL_REDIRECT", "false").strip().lower() == "true"
+)
 SECURE_HSTS_SECONDS: int = 31536000 if AUTH_MODE == "iis" else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS: bool = AUTH_MODE == "iis"
 SECURE_HSTS_PRELOAD: bool = False

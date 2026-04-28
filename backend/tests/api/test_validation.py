@@ -15,6 +15,7 @@ from api.validation import (
     validate_cors_allowed_origins,
     validate_distinguished_name,
     validate_hostname,
+    validate_ip_allowlist,
     validate_ldap_base_dn,
     validate_ldap_server_uri,
     validate_log_format,
@@ -92,6 +93,28 @@ class TestHostnameValidation:
         """Empty allowlist entries fail closed."""
         with pytest.raises(ImproperlyConfigured, match="ALLOWED_HOSTS contains"):
             validate_allowed_hosts("localhost,,app.example.local")
+
+    def test_validate_ip_allowlist_accepts_literal_ips(self) -> None:
+        """Trusted proxy allowlist accepts explicit IPv4/IPv6 literals."""
+        assert validate_ip_allowlist(
+            "127.0.0.1, 2001:db8::1", field_name="TRUSTED_AUTH_PROXY_IPS"
+        ) == ["127.0.0.1", "2001:db8::1"]
+
+    def test_validate_ip_allowlist_allows_empty_value(self) -> None:
+        """Empty trusted proxy allowlist string resolves to empty list."""
+        assert validate_ip_allowlist("", field_name="TRUSTED_AUTH_PROXY_IPS") == []
+
+    def test_validate_ip_allowlist_rejects_empty_entry(self) -> None:
+        """Blank entries in proxy allowlist are rejected."""
+        with pytest.raises(ImproperlyConfigured, match="contains an empty entry"):
+            validate_ip_allowlist("127.0.0.1, ", field_name="TRUSTED_AUTH_PROXY_IPS")
+
+    def test_validate_ip_allowlist_rejects_non_ip(self) -> None:
+        """Hostnames are rejected for trusted proxy IP allowlists."""
+        with pytest.raises(ImproperlyConfigured, match="Expected a literal IP"):
+            validate_ip_allowlist(
+                "proxy.example.local", field_name="TRUSTED_AUTH_PROXY_IPS"
+            )
 
 
 class TestOriginValidation:

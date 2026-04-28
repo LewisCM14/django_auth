@@ -16,4 +16,8 @@ for name, value in vars(_settings).items():
     if name.isupper():
         globals()[name] = value
 
+# Test client requests are HTTP by default; disable redirect enforcement so
+# middleware/authz tests can exercise application behavior directly.
+SECURE_SSL_REDIRECT = False
+
 del _settings

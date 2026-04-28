@@ -28,37 +28,39 @@ def _iter_project_view_classes() -> list[tuple[str, type[object]]]:
     return classes
 
 
-def test_project_views_inherit_from_base_apiview() -> None:
-    """Every concrete project view should inherit from BaseAPIView."""
+class TestViewBaseClass:
+    """Guardrail tests for the shared API view base class."""
 
-    violations = [
-        label
-        for label, view_class in _iter_project_view_classes()
-        if not issubclass(view_class, BaseAPIView)
-    ]
+    def test_project_views_inherit_from_base_apiview(self) -> None:
+        """Every concrete project view should inherit from BaseAPIView."""
 
-    assert not violations, "\n".join(
-        [
-            "Views must inherit from BaseAPIView:",
-            *violations,
+        violations = [
+            label
+            for label, view_class in _iter_project_view_classes()
+            if not issubclass(view_class, BaseAPIView)
         ]
-    )
 
+        assert not violations, "\n".join(
+            [
+                "Views must inherit from BaseAPIView:",
+                *violations,
+            ]
+        )
 
-def test_non_docs_views_define_serializer_class() -> None:
-    """Non-wrapper views must declare serializer metadata for spectacular."""
+    def test_non_docs_views_define_serializer_class(self) -> None:
+        """Non-wrapper views must declare serializer metadata for spectacular."""
 
-    violations = []
-    for label, view_class in _iter_project_view_classes():
-        if label.startswith("docs.py:"):
-            continue
+        violations = []
+        for label, view_class in _iter_project_view_classes():
+            if label.startswith("docs.py:"):
+                continue
 
-        if getattr(view_class, "serializer_class", None) is None:
-            violations.append(label)
+            if getattr(view_class, "serializer_class", None) is None:
+                violations.append(label)
 
-    assert not violations, "\n".join(
-        [
-            "Views must define serializer_class unless they are schema/docs wrappers:",
-            *violations,
-        ]
-    )
+        assert not violations, "\n".join(
+            [
+                "Views must define serializer_class unless they are schema/docs wrappers:",
+                *violations,
+            ]
+        )

@@ -35,43 +35,46 @@ def _cache_method_name(call: ast.Call) -> str | None:
     return call.func.attr
 
 
-def test_application_code_does_not_use_literal_cache_keys() -> None:
-    """Application cache API calls must use api.cache_keys builders for keys."""
-    violations: list[str] = []
+class TestCacheKeyEnforcement:
+    """Guardrail tests for cache key construction conventions."""
 
-    for path in sorted(API_ROOT.rglob("*.py")):
-        if path == CACHE_KEY_MODULE:
-            continue
+    def test_application_code_does_not_use_literal_cache_keys(self) -> None:
+        """Application cache API calls must use api.cache_keys builders for keys."""
+        violations: list[str] = []
 
-        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        rel_path = path.relative_to(API_ROOT.parent)
-
-        for node in ast.walk(module):
-            if not isinstance(node, ast.Call):
+        for path in sorted(API_ROOT.rglob("*.py")):
+            if path == CACHE_KEY_MODULE:
                 continue
 
-            method_name = _cache_method_name(node)
-            if method_name is None:
-                continue
+            module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            rel_path = path.relative_to(API_ROOT.parent)
 
-            key_node: ast.AST | None = node.args[0] if node.args else None
-            if key_node is None:
-                for keyword in node.keywords:
-                    if keyword.arg == "key":
-                        key_node = keyword.value
-                        break
+            for node in ast.walk(module):
+                if not isinstance(node, ast.Call):
+                    continue
 
-            if key_node is None:
-                continue
+                method_name = _cache_method_name(node)
+                if method_name is None:
+                    continue
 
-            if _is_literal_key_expression(key_node):
-                violations.append(
-                    f"{rel_path}:{node.lineno} uses literal key in cache.{method_name}()"
-                )
+                key_node: ast.AST | None = node.args[0] if node.args else None
+                if key_node is None:
+                    for keyword in node.keywords:
+                        if keyword.arg == "key":
+                            key_node = keyword.value
+                            break
 
-    assert not violations, "\n".join(
-        [
-            "Found literal cache keys in application code. Use api.cache_keys builders instead:",
-            *violations,
-        ]
-    )
+                if key_node is None:
+                    continue
+
+                if _is_literal_key_expression(key_node):
+                    violations.append(
+                        f"{rel_path}:{node.lineno} uses literal key in cache.{method_name}()"
+                    )
+
+        assert not violations, "\n".join(
+            [
+                "Found literal cache keys in application code. Use api.cache_keys builders instead:",
+                *violations,
+            ]
+        )

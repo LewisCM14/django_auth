@@ -48,7 +48,7 @@
 
 ## Design
 
-*Design intention is to use the `Representational State Transfer (REST)` protocol to provide `Backend-for-Frontend (BFF)` endpoints as the primary API style for the application. All authentication and authorization needs are handled by IIS using Windows Authentication and Active Directory. The backend receives user identity via IIS-injected `X-Remote-User` HTTP header. The application is served via ASGI (using Uvicorn under IIS HttpPlatformHandler in production). HTTPS is enforced at the IIS layer; the Django application assumes all traffic is TLS-terminated by the reverse proxy. CSRF middleware remains enabled in Django, while DRF session authentication is disabled so API authentication and authorization remain middleware-driven via IIS identity headers. CORS is managed via `django-cors-headers`, supporting both same-origin deployments (where the frontend is served by the same IIS instance) and cross-origin deployments (where the frontend is hosted separately).*
+*Design intention is to use the `Representational State Transfer (REST)` protocol to provide `Backend-for-Frontend (BFF)` endpoints as the primary API style for the application. All authentication and authorization needs are handled by IIS using Windows Authentication and Active Directory. The backend receives user identity via IIS-injected `X-IIS-WindowsAuthToken` HTTP header. The application is served via ASGI (using Uvicorn under IIS HttpPlatformHandler in production). HTTPS is enforced at the IIS layer; the Django application assumes all traffic is TLS-terminated by the reverse proxy. CSRF middleware remains enabled in Django, while DRF session authentication is disabled so API authentication and authorization remain middleware-driven via IIS identity headers. CORS is managed via `django-cors-headers`, supporting both same-origin deployments (where the frontend is served by the same IIS instance) and cross-origin deployments (where the frontend is hosted separately).*
 
 ### Application Architecture Diagram
 
@@ -106,7 +106,7 @@ Middleware`"]
 
     User --> FE
     FE -- "HTTPS" --> WinAuth
-    WinAuth -- "X-Remote-User" --> Proxy
+    WinAuth -- "X-IIS-WindowsAuthToken" --> Proxy
     Proxy -- "ASGI (Uvicorn)" --> MW_CORS
     MW_CORS --> MW_RID
     MW_RID --> MW_AuthN
@@ -184,7 +184,7 @@ ruff >= 0.15.9`"]
 1. API Layer (`Django REST Framework (DRF)`)
     - Exposes stable endpoints as DRF `APIView` subclasses, with a thin shared `api/views/base.py::BaseAPIView` providing common request-user helpers.
     - Every endpoint provides explicit schema metadata (via `serializer_class` or `@extend_schema`) so `drf-spectacular` can generate a complete OpenAPI document, including simple JSON endpoints such as `/api/health/` and `/api/user/`.
-    - Relies on the custom `api.middleware.authentication.AuthenticationMiddleware` to resolve the IIS-provided `X-Remote-User` into a Django `User`, or attach `AnonymousUser` when no identity is present.
+    - Relies on the custom `api.middleware.authentication.AuthenticationMiddleware` to resolve the IIS-provided `X-IIS-WindowsAuthToken` into a Django `User`, or attach `AnonymousUser` when no identity is present.
     - Uses `ldap3` library to query Active Directory for group membership on every `@authz_roles` request. Results are not cached — AD changes take immediate effect.
     - Maps AD group membership to Django user roles for authorization (e.g., admin access).
     - Every view must explicitly apply all three decorator families: authorization (`@authz_*`), rate limiting (`@throttle` / `@throttle_exempt`), and cache policy (`@cache_*`). This is enforced by middleware, and missing decorators raise `ImproperlyConfigured`.
@@ -267,7 +267,7 @@ sequenceDiagram
     alt IIS auth fails
         IIS-->>FE: 401 Unauthorized
     else IIS auth succeeds
-        IIS->>RID: ASGI request + X-Remote-User
+        IIS->>RID: ASGI request + X-IIS-WindowsAuthToken
         RID->>RID: Generate X-Request-ID
         RID->>AuthN: Forward request
         AuthN->>AuthN: Resolve identity
@@ -304,7 +304,7 @@ flowchart TD
 (no auth checks)`"]
 
     PUBLIC -- no --> AUTHN{"`@authz_authenticated?`"}
-    AUTHN -- yes --> CHK_USER{"`X-Remote-User
+    AUTHN -- yes --> CHK_USER{"`X-IIS-WindowsAuthToken
 present?`"}
 present?`"}
     CHK_USER -- no --> R401A["`401 JSON envelope
@@ -313,7 +313,7 @@ present?`"}
 (no role check)`"]
 
     AUTHN -- no --> ROLES{"`@authz_roles(...)?`"}
-    ROLES -- yes --> CHK_USER2{"`X-Remote-User
+    ROLES -- yes --> CHK_USER2{"`X-IIS-WindowsAuthToken
 present?`"}
 present?`"}
     CHK_USER2 -- no --> R401B["`401 JSON envelope
@@ -431,7 +431,7 @@ backend/
 | `api/models.py`                     | Persistence          | ORM models |
 | `api/middleware/`                   | API/Cross-cutting    | Middleware package (see below) |
 | `api/middleware/request_id.py`      | Cross-cutting        | Request-ID injection middleware and correlated access logging |
-| `api/middleware/authentication.py`  | API                  | Resolves `X-Remote-User` into a Django `User` in IIS mode and injects a mock identity in dev mode; attaches `AnonymousUser` when unauthenticated and preserves `_cached_user` for DRF wrappers |
+| `api/middleware/authentication.py`  | API                  | Resolves `X-IIS-WindowsAuthToken` into a Django `User` in IIS mode and injects a mock identity in dev mode; attaches `AnonymousUser` when unauthenticated and preserves `_cached_user` for DRF wrappers |
 | `api/middleware/enforcement.py`    | API/Cross-cutting    | Decorator enforcement — ensures every view declares `@throttle`/`@cache_*`/`@authz_*` decorators |
 | `api/middleware/authorization.py`   | API                  | LDAP group membership lookup, role mapping, and access control |
 | `api/middleware/content_security_policy.py` | Cross-cutting | Response middleware that injects the strict Content-Security-Policy header |
@@ -443,7 +443,7 @@ backend/
 | `api/views/user.py`                 | API                  | User identity and role `APIView` |
 | `api/permissions.py`                | API/Cross-cutting    | Per-view authorization permission decorators (`@authz_public`, `@authz_authenticated`, `@authz_roles`) |
 | `api/caching.py`                    | Cross-cutting        | `@cache_public`, `@cache_private`, `@cache_disabled` decorators — per-view HTTP cache-control policy with enforcement via middleware |
-| `api/throttling.py`                 | Cross-cutting        | `@throttle` and `@throttle_exempt` decorators — per-view, per-user rate limiting with explicit rate strings; `RemoteUserRateThrottle` keyed on `X-Remote-User` identity |
+| `api/throttling.py`                 | Cross-cutting        | `@throttle` and `@throttle_exempt` decorators — per-view, per-user rate limiting with explicit rate strings; `RemoteUserRateThrottle` keyed on `X-IIS-WindowsAuthToken` identity |
 | `api/security_logging.py`           | Cross-cutting        | Structured security event field builders for authentication, authorization, validation, throttling, access, and exception logs |
 | `api/serializers/`                  | API                  | Serializer package and export surface |
 | `api/serializers/health_serializer.py` | API               | Health endpoint response serializer (`HealthSerializer`) |
@@ -471,7 +471,7 @@ backend/
 
 **Get Health** (`GET /api/health/`)
 
-Returns the application status, API version, and process uptime. This endpoint is unauthenticated and publicly accessible — no `X-Remote-User` or role membership is required. Intended for use by load balancers, uptime monitors, and IIS health probes. The release pipeline replaces the `APP_VERSION` placeholder in `.env` with the tagged release version.
+Returns the application status, API version, and process uptime. This endpoint is unauthenticated and publicly accessible — no `X-IIS-WindowsAuthToken` or role membership is required. Intended for use by load balancers, uptime monitors, and IIS health probes. The release pipeline replaces the `APP_VERSION` placeholder in `.env` with the tagged release version.
 
 Implementation note: this endpoint is implemented as a DRF `APIView`, is explicitly marked with `@authz_public`, and declares response serializer metadata so it appears in `drf-spectacular`.
 
@@ -496,7 +496,7 @@ Implementation note: this endpoint is implemented as a DRF `APIView`, is explici
 
 **Get User** (`GET /api/user/`)
 
-Returns the authenticated user's identity and assigned roles. Requires a valid `X-Remote-User` (provided by IIS in production or injected by dev-mode middleware locally). The authorization middleware resolves the user's AD group memberships (via LDAP, queried per-request) and maps them to application roles before the request reaches this view.
+Returns the authenticated user's identity and assigned roles. Requires a valid `X-IIS-WindowsAuthToken` (provided by IIS in production or injected by dev-mode middleware locally). The authorization middleware resolves the user's AD group memberships (via LDAP, queried per-request) and maps them to application roles before the request reaches this view.
 
 Designed to be called by the frontend on initial load to populate a context provider (`UserContext`) or state store (e.g., Redux slice / Zustand store). The response shape is intentionally flat and self-contained so the frontend can store it directly without transformation.
 
@@ -506,7 +506,7 @@ Implementation note: this endpoint is implemented as a DRF `APIView` and declare
 |-----------------|----------------------------|
 | Method          | `GET`                      |
 | URL             | `/api/user/`               |
-| Authentication  | IIS (`X-Remote-User`)        |
+| Authentication  | IIS (`X-IIS-WindowsAuthToken`)        |
 | Authorization   | Any configured role (`app_admin` or `app_viewer`) |
 | View            | `api/views/user.py`        |
 
@@ -520,10 +520,10 @@ Implementation note: this endpoint is implemented as a DRF `APIView` and declare
 
 | Field      | Type       | Description |
 |------------|------------|-------------|
-| `username` | `string`   | The `X-Remote-User` identity as provided by IIS (typically `DOMAIN\username`). |
+| `username` | `string`   | The `X-IIS-WindowsAuthToken` identity as provided by IIS (typically `DOMAIN\username`). |
 | `roles`    | `string[]` | Application roles derived from AD group membership. One or more of: `app_admin`, `app_viewer`. |
 
-*Response* `401 Unauthorized` — No `X-Remote-User` header present (IIS auth not configured or request not authenticated).
+*Response* `401 Unauthorized` — No `X-IIS-WindowsAuthToken` header present (IIS auth not configured or request not authenticated).
 ```json
 {
     "detail": "Authentication credentials were not provided.",
@@ -546,7 +546,7 @@ Implementation note: this endpoint is implemented as a DRF `APIView` and declare
 - Requires IIS authentication (any domain user) but no specific application role.
 - Implemented via `api/views/docs.py` wrapper view marked `@authz_authenticated`.
 
-*Response* `401 Unauthorized` — No `X-Remote-User` header present.
+*Response* `401 Unauthorized` — No `X-IIS-WindowsAuthToken` header present.
 ```json
 {
     "detail": "Authentication credentials were not provided.",
@@ -560,7 +560,7 @@ Implementation note: this endpoint is implemented as a DRF `APIView` and declare
 - Requires IIS authentication (any domain user) but no specific application role.
 - Implemented via `api/views/docs.py` wrapper view built on `SpectacularSwaggerSplitView` and marked `@authz_authenticated`.
 
-*Response* `401 Unauthorized` — No `X-Remote-User` header present.
+*Response* `401 Unauthorized` — No `X-IIS-WindowsAuthToken` header present.
 ```json
 {
     "detail": "Authentication credentials were not provided.",
@@ -580,7 +580,7 @@ Implementation note: this endpoint is implemented as a DRF `APIView` and declare
 2. **Structured JSON in production** — Production logs are emitted as single-line JSON objects for consistent, machine-parseable output. This simplifies `grep`/`findstr` filtering, integration with Windows Event Forwarding, and future adoption of log aggregation tooling. Development mode uses human-readable console output.
 3. **Per-request access log** — Every HTTP request/response pair is logged once with method, path, status code, duration (ms), user identity, source IP, user agent, and request-ID. This replaces the need for IIS access logs at the Django layer and provides richer context for operations and incident triage.
 4. **Security audit trail** — Authentication failures, authorization denials, validation failures, rate-limit denials, and unhandled exceptions emit typed security events via `api.security_logging.py` with structured fields (user, IP, user agent, resource, status code, duration where applicable).
-5. **No sensitive data in logs** — Request bodies, passwords, tokens, and PII beyond the username should never be logged. The `X-Remote-User` header value (corporate username) is the only identity field included.
+5. **No sensitive data in logs** — Request bodies, passwords, tokens, and PII beyond the username should never be logged. The `X-IIS-WindowsAuthToken` header value (corporate username) is the only identity field included.
 6. **No duplicate runserver access log** — Django's built-in `django.server` request logger is silenced so the middleware-owned access log is the single request log line during local development.
 
 ```mermaid
@@ -624,7 +624,7 @@ The `RequestIdMiddleware` already generates `X-Request-ID` and attaches it to `r
 | Event Type | Emitted By | When | Core Fields |
 |------------|------------|------|-------------|
 | `ACCESS` | `RequestIdMiddleware` | Every request/response pair | method, path, status code, duration, user, source IP, user agent |
-| `AUTHENTICATION_SUCCESS` | `AuthenticationMiddleware` | Valid `X-Remote-User` or `DEV_USER_IDENTITY` resolved | user, source IP, user agent |
+| `AUTHENTICATION_SUCCESS` | `AuthenticationMiddleware` | Valid `X-IIS-WindowsAuthToken` or `DEV_USER_IDENTITY` resolved | user, source IP, user agent |
 | `AUTHENTICATION_FAILURE` | `AuthorizationMiddleware` | Request lacks identity | user (anonymous), requested resource, status code |
 | `AUTHORIZATION_FAILURE` | `AuthorizationMiddleware` | Authenticated user lacks required role | user, requested resource, status code |
 | `INPUT_VALIDATION_FAILURE` | `AuthenticationMiddleware`, `api.exceptions` | Invalid username, origin, LDAP value, or serializer validation error | request ID, user, resource, status code |
@@ -748,7 +748,7 @@ Standard HTTP status codes and their `detail` values:
 | Status | `detail` | When |
 |--------|----------|------|
 | `400` | Field-specific validation errors (DRF default shape) | Serializer validation failure |
-| `401` | `"Authentication credentials were not provided."` | No `X-Remote-User` / unauthenticated |
+| `401` | `"Authentication credentials were not provided."` | No `X-IIS-WindowsAuthToken` / unauthenticated |
 | `403` | `"You do not have permission to perform this action."` | Authenticated but lacks required role |
 | `404` | `"Not found."` | URL does not match any route, or object lookup failed |
 | `405` | `"Method '{method}' not allowed."` | HTTP method not supported by the view |
@@ -984,7 +984,7 @@ For CRUD applications, cache invalidation follows a write-through pattern:
 #### Design Principles
 
 1. **Built-in DRF throttling** — Rate limiting builds on DRF's `SimpleRateThrottle`, which is already bundled with `djangorestframework`. No new dependencies are required.
-2. **Per-user identity** — Throttle counters are keyed on the authenticated `X-Remote-User` identity (via a custom throttle class) rather than client IP. This is critical in enterprise environments where all users may share a small number of NAT/proxy IP addresses. Unauthenticated requests (e.g., `/api/health/`) fall back to IP-based keying.
+2. **Per-user identity** — Throttle counters are keyed on the authenticated `X-IIS-WindowsAuthToken` identity (via a custom throttle class) rather than client IP. This is critical in enterprise environments where all users may share a small number of NAT/proxy IP addresses. Unauthenticated requests (e.g., `/api/health/`) fall back to IP-based keying.
 3. **Explicit per-view rates** — Each view declares its rate limit via the `@throttle("rate")` decorator, or explicitly opts out with `@throttle_exempt`. The `DecoratorEnforcementMiddleware` enforces that every view declares one or the other — views without a throttle decorator raise `ImproperlyConfigured` at request time. Rates live alongside the view code they protect, not in centralized settings or environment variables. This keeps limits visible, auditable, and co-located with the endpoint they govern.
 4. **Cache-backed counters** — Throttle state is stored in Django's cache framework (the same `CACHES` backend used elsewhere). In the default single-server deployment, `LocMemCache` process-local counters are sufficient. 
 5. **Standard error response** — Throttled requests receive a `429 Too Many Requests` response using the standard error envelope (`detail` + `request_id`). A `Retry-After` header indicates the number of seconds until the next request is allowed.
@@ -1006,7 +1006,7 @@ Marks a view as explicitly exempt from rate limiting. Sets `_throttle_rate = Non
 
 **Custom throttle class** (`api/throttling.py`):
 
-`RemoteUserRateThrottle` extends DRF's `SimpleRateThrottle`. It reads the rate from the view's `_throttle_rate` attribute (set by the `@throttle` decorator) and overrides `get_cache_key` to extract user identity from `X-Remote-User`. Cache key scopes are derived from the view class name automatically, isolating counters per endpoint.
+`RemoteUserRateThrottle` extends DRF's `SimpleRateThrottle`. It reads the rate from the view's `_throttle_rate` attribute (set by the `@throttle` decorator) and overrides `get_cache_key` to extract user identity from `X-IIS-WindowsAuthToken`. Cache key scopes are derived from the view class name automatically, isolating counters per endpoint.
 
 #### Throttle Response Contract
 
@@ -1056,13 +1056,13 @@ The `detail` and `request_id` fields match the standard error envelope. The `Ret
     - `pytest.ini` sets `testpaths = tests` so discovery is explicit and scoped.
 
 1. Authentication & Authorization Testing
-    - Backend endpoints correctly read user identity from IIS-injected HTTP headers (e.g., `X-Remote-User`).
+    - Backend endpoints correctly read user identity from IIS-injected HTTP headers (e.g., `X-IIS-WindowsAuthToken`).
     - Backend queries Active Directory via LDAP for group membership and maps to application roles.
     - Group/role mapping from Active Directory is respected for admin-only and viewer-only endpoints.
     - Requests without valid IIS authentication are rejected with `401`.
 
     **Testing approach:**
-    - Simulate IIS authentication in tests by setting the `X-Remote-User` header in the Django test client.
+    - Simulate IIS authentication in tests by setting the `X-IIS-WindowsAuthToken` header in the Django test client.
     - Mock LDAP/AD group membership by patching the LDAP backend to return desired group memberships for test users.
     - Use pytest fixtures in `tests/conftest.py` to provide pre-configured clients for `app_admin` and `app_viewer` roles.
     - This approach provides full coverage without requiring a real IIS, AD, or LDAP server.
@@ -1152,203 +1152,236 @@ All configuration inputs are validated at import time in `api.validation.py`. Th
 
 ## Deployment
 
-Deployment targets Windows Server 2022 with IIS serving as the reverse proxy, TLS terminator, and Windows Authentication provider. The Django application runs behind IIS via ASGI using Uvicorn and HttpPlatformHandler.
+Deployment target: **Windows Server 2022 + IIS + HttpPlatformHandler + Uvicorn (ASGI)**, with IIS performing Windows Authentication and forwarding `X-IIS-WindowsAuthToken` to Django.
 
-1. **Install Anaconda & Create Environment**
+> The checklist below is intentionally granular. Treat every sanity check as a required gate before moving to the next step.
 
-    Install Anaconda (or Miniconda) on the Windows Server. Create the application environment from the `environment.yml` file:
+### 1) Pre-flight host validation
 
-    ```powershell
-    conda env create -f environment.yml
-    conda activate django_auth
-    ```
+1. Confirm server OS and patch state.
+   - `winver` should show Windows Server 2022.
+   - Apply latest security updates and reboot if required.
+2. Confirm server time sync (critical for Kerberos).
+   - `w32tm /query /status`
+3. Confirm DNS resolution for AD and application hostnames.
+   - `Resolve-DnsName <dc-hostname>`
+   - `Resolve-DnsName <app-hostname>`
 
-    **Sanity check:** Run `python --version` and confirm it outputs `3.14.x`. Run `conda list` and verify `django`, `djangorestframework`, `ldap3`, `drf-spectacular`, `drf-spectacular-sidecar`, `django-cors-headers`, and `python-dotenv` are all present.
+**Sanity check (must pass):** OS is supported, time is synchronized, DNS resolution works for app and domain controllers.
 
-1. **Configure Environment Variables**
+### 2) Install Python runtime via Anaconda/Miniconda
 
-    Azure DevOps should copy the selected deployment artifact (`.env.qa`, `.env.uat`, or `.env.prod`) into `backend/.env` before IIS starts the app, or set system environment variables directly. The resulting runtime `.env` must contain at least:
+1. Install Anaconda or Miniconda in a non-user profile path (for service stability).
+2. From repo root, create environment:
 
-    ```
-    AUTH_MODE=iis
-    DEBUG=False
-    SECRET_KEY=<unique-unpredictable-value>
-    ALLOWED_HOSTS=<server-hostname>
-    API_VERSION=APP_VERSION
-    ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
-    VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
-    LDAP_SERVER_URI=ldap://dc.corp.local
-    LDAP_BASE_DN=DC=corp,DC=local
-    LOG_FORMAT=json
-    ```
+```powershell
+conda env create -f environment.yml
+conda activate django_auth
+```
 
-    Optionally set `CORS_ALLOWED_ORIGINS` if the frontend is served from a different origin. The backend enables credentialed CORS and rejects malformed origin values, so only absolute `http` or `https` origins without paths are accepted.
+3. Validate runtime and key package versions:
 
-    `ALLOWED_HOSTS` is required in IIS mode; the application fails fast at startup if it is omitted.
+```powershell
+python --version
+python -c "import django, rest_framework, ldap3; print(django.__version__, rest_framework.__version__, ldap3.__version__)"
+```
 
-    LDAP and identity values are also strict allowlists: `LDAP_SERVER_URI` must be an `ldap://` or `ldaps://` URI, `LDAP_BASE_DN` must be a comma-separated DN, and `X-Remote-User` / `DEV_USER_IDENTITY` values must match the approved username pattern.
+**Sanity check (must pass):** Python reports `3.14.x`; Django/DRF/ldap3 imports succeed.
 
-    **Sanity check:** Run `python -c "from dotenv import load_dotenv; load_dotenv(); import os; print(os.getenv('AUTH_MODE'))"` and confirm it prints `iis`. Verify `DEBUG` is `False` — the application will refuse to start if `AUTH_MODE=dev` with `DEBUG=False`, confirming the safety guard works.
+### 3) Stage application files
 
-1. **Run Database Migrations**
+1. Deploy artifact to a fixed path, e.g. `C:\apps\django_auth\backend`.
+2. Ensure `manage.py` exists in the backend root.
+3. Create log directory used by HttpPlatform/Uvicorn, e.g. `C:\apps\django_auth\backend\logs`.
 
-    Apply Django migrations to initialise the database schema (SQLite by default, or whichever database is configured for the deployment):
+**Sanity check (must pass):** `manage.py`, `config\settings.py`, and `logs\` all exist on disk.
 
-    ```powershell
-    python manage.py migrate
-    ```
+### 4) Configure environment variables (`backend/.env`)
 
-    **Sanity check:** Run `python manage.py showmigrations` and confirm all migrations show `[X]` (applied).
+Create `backend/.env` (or equivalent machine-level environment variables) with at least:
 
-1. **Collect Static Files**
+```dotenv
+AUTH_MODE=iis
+DEBUG=False
+SECRET_KEY=<unique-unpredictable-value>
+ALLOWED_HOSTS=<fqdn-or-hostname>
+API_VERSION=APP_VERSION
+ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
+VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
+LDAP_SERVER_URI=ldaps://dc.corp.local
+LDAP_BASE_DN=DC=corp,DC=local
+TRUSTED_AUTH_PROXY_IPS=127.0.0.1
+LOG_FORMAT=json
+# optional hardening toggle
+SECURE_SSL_REDIRECT=true
+```
 
-    Collect static assets for the bundled Swagger UI:
+Notes:
+- `AUTH_MODE=iis` is mandatory for IIS token auth path.
+- `TRUSTED_AUTH_PROXY_IPS` is required in IIS mode and must contain literal IPs only.
+- Prefer `ldaps://` in production.
 
-    ```powershell
-    python manage.py collectstatic --noinput
-    ```
+**Sanity check (must pass):**
 
-    **Sanity check:** Confirm the `STATIC_ROOT` directory exists and contains files (e.g., `drf_spectacular_sidecar` CSS/JS assets).
+```powershell
+cd C:\apps\django_auth\backend
+python -c "from dotenv import load_dotenv; load_dotenv(); import os; print(os.getenv('AUTH_MODE'), os.getenv('TRUSTED_AUTH_PROXY_IPS'))"
+```
 
-1. **Install and Configure IIS**
+Output must include `iis` and non-empty trusted proxy IPs.
 
-    Ensure the following IIS features are enabled on the server:
+### 5) Initialize Django app state
 
-    - Web Server (IIS)
-    - Windows Authentication
-    - URL Authorization
-    - HttpPlatformHandler
+From backend root:
 
-    ```powershell
-    Install-WindowsFeature Web-Server, Web-Windows-Auth, Web-Url-Auth, Web-CGI
-    ```
+```powershell
+conda activate django_auth
+python manage.py migrate
+python manage.py collectstatic --noinput
+python manage.py check --deploy
+```
 
-    **Sanity check:** Open IIS Manager and confirm the features appear under the server node. Run `Get-WindowsFeature Web-Server, Web-Windows-Auth, Web-CGI` and verify all show `Installed`.
+**Sanity check (must pass):**
+- `showmigrations` shows all `[X]`.
+- `collectstatic` completes without errors.
+- `check --deploy` returns no blocking errors.
 
-1. **Register HttpPlatformHandler with IIS**
+### 6) Install and enable IIS roles/features
 
-    Enable HttpPlatformHandler to bridge IIS and the Django ASGI application:
+Install required features:
 
-    ```powershell
-    # HttpPlatformHandler should be installed and enabled at the IIS host level.
-    ```
+```powershell
+Install-WindowsFeature Web-Server,Web-Windows-Auth,Web-Url-Auth,Web-CGI
+```
 
-    This registers the Anaconda Python interpreter and Uvicorn as an ASGI handler in IIS via HttpPlatformHandler.
+Verify:
 
-    **Sanity check:** Run `%windir%\system32\inetsrv\appcmd list config -section:system.webServer/httpPlatform` and confirm the Python interpreter path and Uvicorn command appear in the output.
+```powershell
+Get-WindowsFeature Web-Server,Web-Windows-Auth,Web-Url-Auth,Web-CGI
+```
 
-1. **Create the IIS Site**
+**Sanity check (must pass):** All features show `Installed`.
 
-    Create a new IIS website (or application under an existing site) pointing to the backend directory:
+### 7) Configure IIS Application Pool
 
-    - **Physical path:** The backend root directory (containing `manage.py`).
-    - **Binding:** HTTPS on the appropriate port with a valid TLS certificate.
-    - **Application pool:** Create a dedicated app pool, set to `No Managed Code` (since Python handles execution).
+1. Create dedicated app pool (e.g. `django_auth_pool`).
+2. Set **.NET CLR version** = *No Managed Code*.
+3. Set **Managed pipeline mode** = *Integrated*.
+4. Assign a least-privilege identity (custom service account preferred).
+5. Grant app pool identity read/execute access to backend directory and write access to `logs\`.
 
-    Add a `web.config` to the backend root:
+**Sanity check (must pass):** app pool starts successfully and identity can write to `logs\`.
 
-    ```xml
-    <?xml version="1.0" encoding="UTF-8"?>
-    <configuration>
-      <system.webServer>
-        <handlers>
-          <add name="httpPlatformHandler" path="*" verb="*" modules="httpPlatformHandler" resourceType="Unspecified" />
-        </handlers>
-        <httpPlatform processPath="<conda-env-path>\python.exe"
-                      arguments="-m uvicorn config.asgi:application --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%"
-                      stdoutLogEnabled="true"
-                      stdoutLogFile=".\logs\uvicorn-stdout.log"
-                      startupTimeLimit="60" />
-      </system.webServer>
-      <appSettings>
-        <!-- No longer required: <add key="ASGI_HANDLER" value="config.asgi.application" /> -->
-        <add key="PYTHONPATH" value="<backend-root-path>" />
-        <add key="DJANGO_SETTINGS_MODULE" value="config.settings" />
-      </appSettings>
-    </configuration>
-    ```
+### 8) Create IIS Site and bindings
 
-    Replace `<conda-env-path>` and `<backend-root-path>` with the actual paths.
+1. Create site pointing to backend root path.
+2. Configure HTTPS binding with valid TLS certificate.
+3. Optionally keep HTTP binding only for redirect-to-HTTPS policy.
 
-    **Sanity check:** Browse to `https://<server>/api/health/` from the server itself. It should return `{"status": "ok", "version": "APP_VERSION", "uptime_seconds": <number>}` before release tagging, and the tagged release pipeline should replace `APP_VERSION` with the release tag. If it errors, check IIS logs plus HttpPlatform/Uvicorn stdout-stderr logs.
+**Sanity check (must pass):** site starts without config errors in IIS Manager.
 
-1. **Enable Windows Authentication**
+### 9) Configure `web.config` for HttpPlatformHandler + Uvicorn
 
-    Configure Windows Authentication on the IIS site so authenticated requests can be mapped to `X-Remote-User`:
+Place `web.config` in backend root:
 
-    - In IIS Manager, select the site → **Authentication**.
-    - **Disable** Anonymous Authentication.
-    - **Enable** Windows Authentication.
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <handlers>
+      <add name="httpPlatformHandler"
+           path="*"
+           verb="*"
+           modules="httpPlatformHandler"
+           resourceType="Unspecified" />
+    </handlers>
 
-    Ensure the application pool identity has read access to the backend directory.
+    <httpPlatform
+      processPath="C:\ProgramData\Miniconda3\envs\django_auth\python.exe"
+      arguments="-m uvicorn config.asgi:application --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%"
+      stdoutLogEnabled="true"
+      stdoutLogFile="C:\apps\django_auth\backend\logs\uvicorn-stdout.log"
+      startupTimeLimit="120"
+      requestTimeout="00:10:00"
+      forwardWindowsAuthToken="true" />
+  </system.webServer>
 
-    > **Note:** With Anonymous Authentication disabled, IIS will challenge *all* requests, including `/api/health/`. The health endpoint is marked `@authz_public` at the Django layer (no `X-Remote-User` or role required), but IIS will still require Windows Authentication before the request reaches Django. If load balancers or uptime monitors cannot authenticate via Kerberos/NTLM, consider configuring an IIS URL Authorization rule to allow anonymous access to `/api/health/` only.
+  <appSettings>
+    <add key="PYTHONPATH" value="C:\apps\django_auth\backend" />
+    <add key="DJANGO_SETTINGS_MODULE" value="config.settings" />
+  </appSettings>
+</configuration>
+```
 
-1. **Inject `X-Remote-User` for the upstream ASGI process**
+> Use your actual paths. `forwardWindowsAuthToken="true"` is required for this project’s auth flow.
 
-    When using HttpPlatformHandler, do **not** rely on `forwardWindowsAuthToken` for Django identity; that setting forwards an opaque Windows token handle (`X-IIS-WindowsAuthToken`), not a username string.
+**Sanity check (must pass):**
+- `appcmd list config <site-name> -section:system.webServer/httpPlatform` shows configured handler.
+- Uvicorn stdout log file appears after first request.
 
-    Instead, set a trusted server variable/header from IIS-authenticated identity (for example `LOGON_USER`) and strip any client-supplied `X-Remote-User` value before setting the internal value.
+### 10) Enable IIS Windows Authentication
 
-    ```xml
-    <rewrite>
-      <allowedServerVariables>
-        <add name="HTTP_X_REMOTE_USER" />
-      </allowedServerVariables>
-      <rules>
-        <rule name="Set X-Remote-User from Windows auth" stopProcessing="true">
-          <match url="(.*)" />
-          <serverVariables>
-            <set name="HTTP_X_REMOTE_USER" value="{LOGON_USER}" />
-          </serverVariables>
-          <action type="None" />
-        </rule>
-      </rules>
-    </rewrite>
-    ```
+In IIS site **Authentication**:
+- Disable **Anonymous Authentication** (except optional health-path exception policy).
+- Enable **Windows Authentication**.
 
-    Validate the exact server variable behavior in your estate; module ordering can differ by environment. If `LOGON_USER` is still anonymous/empty at rewrite time, use an IIS-native auth propagation approach instead of URL Rewrite.
+Optional: if monitoring requires anonymous `/api/health/`, implement a narrowly scoped IIS authorization rule for only that endpoint.
 
-    **Sanity check:** Browse to `https://<server>/api/user/` from a domain-joined machine. The browser should negotiate Kerberos/NTLM silently and return a `200` with the user's `username` and `roles`. If you receive a `401`, check that Windows Authentication is enabled and Anonymous is disabled. If you receive a `403`, confirm the user is a member of a configured AD group.
+**Sanity check (must pass):**
+- Unauthenticated request to `/api/user/` receives authentication challenge (or 401).
+- Domain-joined browser can negotiate Kerberos/NTLM.
 
-1. **Configure LDAP Connectivity**
+### 11) Token forwarding correctness checks
 
-    Ensure the server can reach the Active Directory LDAP endpoint specified in `LDAP_SERVER_URI` and that the application pool identity (or the authenticated user, depending on bind strategy) has read access to query group memberships beneath `LDAP_BASE_DN`.
+1. Confirm app receives `HTTP_X_IIS_WINDOWSAUTHTOKEN` (opaque handle), not `LOGON_USER` text rewrite.
+2. Do **not** use URL Rewrite to map `LOGON_USER` into `X-IIS-WindowsAuthToken`.
 
-    **Sanity check:** From the server, run:
-    ```powershell
-    python -c "from ldap3 import Server, Connection, ALL; s = Server('<LDAP_SERVER_URI>', get_info=ALL); c = Connection(s, auto_bind=True); print(c.result)"
-    ```
-    Confirm the connection succeeds. Then call `GET /api/user/` as a domain user who belongs to a configured AD group and verify the `roles` array is populated correctly.
+**Sanity check (must pass):** application logs show token-auth path success, and `/api/user/` resolves correct username/roles for authorized user.
 
-1. **Configure HTTPS & TLS**
+### 12) LDAP connectivity checks
 
-    Bind a valid TLS certificate to the IIS site. If using an internal CA, ensure the certificate is trusted by client browsers.
-    Configure IIS to forward the original scheme to Django as `X-Forwarded-Proto: https` so `SecurityMiddleware` can correctly mark requests as secure and emit HSTS.
+1. Verify TCP reachability to DC and LDAP port(s):
+   - `Test-NetConnection <dc-host> -Port 636` (LDAPS)
+2. Validate bind/query from server context:
 
-    - In IIS Manager, select the site → **Bindings** → Edit the HTTPS binding → Select the certificate.
-    - Remove any HTTP bindings (or add a redirect rule from HTTP → HTTPS).
+```powershell
+python -c "from ldap3 import Server, Connection; s=Server('<LDAP_SERVER_URI>'); c=Connection(s, auto_bind=True); print(c.result)"
+```
 
-    Django also emits production security headers and cookie flags in IIS mode, including `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, a strict `Content-Security-Policy`, and secure `Session` / `CSRF` cookie settings.
+**Sanity check (must pass):** LDAP bind/query succeeds and app returns expected roles for test users.
 
-    **Sanity check:** Browse to the site URL via HTTPS and confirm the browser shows a valid certificate (no warnings). Attempt to browse via HTTP and confirm it is either refused or redirected to HTTPS.
+### 13) TLS and security headers verification
 
-1. **Verify End-to-End**
+1. Browse app via HTTPS and validate certificate chain.
+2. Confirm HTTP requests redirect to HTTPS when `SECURE_SSL_REDIRECT=true` and IIS redirect policy is enabled.
+3. Validate response headers (`Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, CSP, etc.).
 
-    Perform a full end-to-end validation from a domain-joined client machine:
+**Sanity check (must pass):** headers present as expected and no certificate warnings.
 
-    | Step | Action | Expected Result |
-    |------|--------|-----------------|
-    | 1 | `GET /api/health/` | `200 OK` — `{"status": "ok", "version": "APP_VERSION", "uptime_seconds": <number>}` before release tagging; the pipeline replaces the placeholder with the release tag (no authentication required) |
-    | 2 | `GET /api/user/` (unauthenticated / anonymous) | `401 Unauthorized` |
-    | 3 | `GET /api/user/` (domain user in configured AD group) | `200 OK` — `{"username": "DOMAIN\\user", "roles": [...]}` |
-    | 4 | `GET /api/user/` (domain user not in any configured group) | `403 Forbidden` |
-    | 5 | `GET /api/docs/` (unauthenticated) | `401 Unauthorized` |
-    | 6 | `GET /api/docs/` (any domain user) | Swagger UI loads successfully from local static assets |
-    | 7 | `GET /api/schema/` (unauthenticated) | `401 Unauthorized` |
-    | 8 | `GET /api/schema/` (any domain user) | OpenAPI 3 JSON schema returned |
+### 14) End-to-end functional verification matrix
 
-    **Sanity check:** All eight checks pass. Review the IIS access logs and confirm requests are logged with the expected HTTP status codes and authenticated usernames.
+| Step | Action | Expected |
+|---|---|---|
+| 1 | `GET /api/health/` | `200` and valid JSON payload |
+| 2 | `GET /api/user/` without authenticated Windows identity | `401` |
+| 3 | `GET /api/user/` as AD user in configured group | `200` with `username` + `roles` |
+| 4 | `GET /api/user/` as AD user not in configured groups | `403` |
+| 5 | `GET /api/docs/` unauthenticated | `401` |
+| 6 | `GET /api/docs/` authenticated | Swagger UI loads |
+| 7 | `GET /api/schema/` unauthenticated | `401` |
+| 8 | `GET /api/schema/` authenticated | OpenAPI JSON returned |
+
+**Sanity check (must pass):** all rows match expected status/behavior.
+
+### 15) Operational runbook checks (post-deploy)
+
+1. Verify IIS logs, Windows Event Viewer, and `uvicorn-stdout.log` for startup/auth errors.
+2. Confirm no repeated authentication failures from untrusted source IPs.
+3. Confirm request IDs appear consistently in logs for correlation.
+4. Capture and archive a deployment evidence bundle (commands + outputs above).
+
+**Sanity check (must pass):** no critical errors in first smoke-test window, and audit evidence captured.
+
 
 ---
 

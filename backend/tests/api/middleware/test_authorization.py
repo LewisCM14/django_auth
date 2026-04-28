@@ -12,12 +12,16 @@ Role resolution happens only when a view requires roles:
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
+from collections.abc import Coroutine
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
+from django.http import HttpResponse
 from django.test import override_settings
 
 from api.constants import ADMIN_AD_GROUP, ROLE_ADMIN, ROLE_VIEWER, VIEWER_AD_GROUP
@@ -39,12 +43,7 @@ def _make_roles_view(
     def wrapped_view() -> None:
         return None
 
-    # Django's URL resolver attaches `view_class` dynamically to the callable
-    # returned by `as_view()`. In tests we emulate that runtime shape.
-    # Django's as_view() dynamically attaches view_class to the callable at
-    # runtime. We replicate that here so the middleware resolves policy/roles
-    # from the class. All 'attr-defined' ignores in this file are the same pattern.
-    wrapped_view.view_class = RolesView  # type: ignore[attr-defined]
+    wrapped_view.view_class = RolesView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
     return wrapped_view
 
 
@@ -291,9 +290,7 @@ class TestAuthorizationMiddlewareIISMode:
             """Dummy resolved callable used by Django for class-based views."""
             return None
 
-        # Django's URL resolver attaches `view_class` dynamically to the callable
-        # returned by `as_view()`. In tests we emulate that runtime shape.
-        wrapped_view.view_class = PublicView  # type: ignore[attr-defined]
+        wrapped_view.view_class = PublicView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             result = middleware.process_view(request, wrapped_view, [], {})
@@ -317,8 +314,7 @@ class TestAuthorizationMiddlewareIISMode:
         def wrapped_view() -> None:
             return None
 
-        # Emulates Django's as_view() runtime attachment (see _make_roles_view).
-        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
+        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
@@ -344,8 +340,7 @@ class TestAuthorizationMiddlewareIISMode:
         def wrapped_view() -> None:
             return None
 
-        # Emulates Django's as_view() runtime attachment (see _make_roles_view).
-        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]
+        wrapped_view.view_class = AuthenticatedView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             result = middleware.process_view(request, wrapped_view, [], {})
@@ -369,9 +364,7 @@ class TestAuthorizationMiddlewareIISMode:
             """Dummy resolved callable used by Django for class-based views."""
             return None
 
-        # Mirrors Django's runtime behavior where `as_view()` callables carry
-        # a dynamically attached `view_class` attribute.
-        wrapped_view.view_class = UndecoratedView  # type: ignore[attr-defined]
+        wrapped_view.view_class = UndecoratedView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         from django.core.exceptions import ImproperlyConfigured
 
@@ -414,9 +407,7 @@ class TestAuthorizationMiddlewareIISMode:
         def wrapped_view() -> None:
             return None
 
-        # Mirrors Django's runtime behavior where `as_view()` callables carry
-        # a dynamically attached `view_class` attribute.
-        wrapped_view.view_class = MisconfiguredRolesView  # type: ignore[attr-defined]
+        wrapped_view.view_class = MisconfiguredRolesView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
             mock_ldap.return_value = [ADMIN_AD_GROUP]
@@ -445,9 +436,7 @@ class TestAuthorizationMiddlewareIISMode:
         def wrapped_view() -> None:
             return None
 
-        # Mirrors Django's runtime behavior where `as_view()` callables carry
-        # a dynamically attached `view_class` attribute.
-        wrapped_view.view_class = UnknownPolicyView  # type: ignore[attr-defined]
+        wrapped_view.view_class = UnknownPolicyView  # type: ignore[attr-defined]  # Mirrors Django as_view() runtime behavior where resolver callables carry view_class.
 
         with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             from django.core.exceptions import ImproperlyConfigured
@@ -470,16 +459,15 @@ class TestAuthorizationMiddlewareIISMode:
         assert result.status_code == 401
 
 
-def test_query_ldap_groups_returns_empty_when_not_configured() -> None:
-    """LDAP query returns empty list when settings are not configured."""
-    from api.middleware.authorization import query_ldap_groups
-
-    with override_settings(LDAP_SERVER_URI="", LDAP_BASE_DN=""):
-        assert query_ldap_groups("DOMAIN\\someone") == []
-
-
 class TestQueryLdapGroups:
     """Tests for the real LDAP query function."""
+
+    def test_returns_empty_when_not_configured(self) -> None:
+        """LDAP query returns empty list when settings are not configured."""
+        from api.middleware.authorization import query_ldap_groups
+
+        with override_settings(LDAP_SERVER_URI="", LDAP_BASE_DN=""):
+            assert query_ldap_groups("DOMAIN\\someone") == []
 
     def test_returns_empty_when_server_uri_not_configured(self) -> None:
         """Returns [] when LDAP_SERVER_URI is blank."""
@@ -652,8 +640,7 @@ class TestAuthorizationMiddlewareHelpers:
         def fbv() -> None:
             return None
 
-        # Simulates @authz_public setting the attribute directly on a FBV.
-        fbv.authz_policy = "public"  # type: ignore[attr-defined]
+        fbv.authz_policy = "public"  # type: ignore[attr-defined]  # Simulates decorator-injected function metadata used by middleware resolution.
 
         assert middleware._get_view_attr(fbv, AUTHZ_POLICY_ATTR, str) == "public"
 
@@ -664,8 +651,7 @@ class TestAuthorizationMiddlewareHelpers:
         def fbv() -> None:
             return None
 
-        # Simulates @authz_roles setting the attribute directly on a FBV.
-        fbv.authz_roles = (ROLE_ADMIN,)  # type: ignore[attr-defined]
+        fbv.authz_roles = (ROLE_ADMIN,)  # type: ignore[attr-defined]  # Simulates decorator-injected function metadata used by middleware resolution.
 
         assert middleware._get_view_attr(fbv, AUTHZ_ROLES_ATTR, tuple) == (ROLE_ADMIN,)
 
@@ -874,3 +860,35 @@ class TestAuthorizationMiddlewareErrorResponseShape:
         assert result.status_code == 500
         body = json.loads(result.content)
         assert "secret internal detail" not in json.dumps(body)
+
+
+class TestAuthorizationMiddlewareAsyncCompatibility:
+    """Async compatibility coverage for authorization middleware."""
+
+    def test_supports_async_get_response(self) -> None:
+        """Authorization middleware awaits async downstream responses."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=202)
+
+        middleware = AuthorizationMiddleware(get_response)
+        request = Mock()
+
+        response = asyncio.run(middleware.__acall__(request))
+
+        assert response.status_code == 202
+
+    def test_call_returns_coroutine_in_async_mode(self) -> None:
+        """Authorization middleware __call__ uses async path when required."""
+
+        async def get_response(request: Any) -> HttpResponse:
+            return HttpResponse(status=206)
+
+        middleware = AuthorizationMiddleware(get_response)
+        request = Mock()
+
+        result = middleware(request)
+        assert inspect.isawaitable(result)
+        response = asyncio.run(cast(Coroutine[Any, Any, HttpResponse], result))
+
+        assert response.status_code == 206

@@ -212,6 +212,41 @@ class TestSettingsSecurityConfig:
         assert "script-src 'self'" in module.CONTENT_SECURITY_POLICY
         assert "style-src 'self'" in module.CONTENT_SECURITY_POLICY
 
+    def test_secure_ssl_redirect_can_be_enabled_explicitly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SECURE_SSL_REDIRECT follows explicit environment opt-in."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
+        monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+        monkeypatch.setenv("SECURE_SSL_REDIRECT", "true")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_security_iis_ssl_redirect")
+
+        assert module.SECURE_SSL_REDIRECT is True
+
+    def test_iis_mode_requires_trusted_auth_proxy_ips(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IIS mode fails closed when trusted auth proxy allowlist is empty."""
+        monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
+        monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
+        monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+        monkeypatch.setenv("TRUSTED_AUTH_PROXY_IPS", "")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(
+                ImproperlyConfigured, match="TRUSTED_AUTH_PROXY_IPS is required"
+            ):
+                _load_settings_module(
+                    "test_settings_security_iis_trusted_proxy_required"
+                )
+
 
 class TestSettingsVersionConfig:
     """Tests for API version configuration exported by settings."""

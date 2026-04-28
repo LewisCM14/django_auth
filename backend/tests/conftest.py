@@ -30,10 +30,16 @@ def admin_client(monkeypatch: pytest.MonkeyPatch) -> Client:
         "api.middleware.authorization.query_ldap_groups",
         mock_query_ldap_groups,
     )
+    monkeypatch.setattr(
+        "api.middleware.authentication.WindowsAuthIdentityResolver.resolve",
+        lambda _self, _token: "DOMAIN\\admin_user",
+    )
     monkeypatch.setenv("AUTH_MODE", "iis")
+    monkeypatch.setenv("TRUSTED_AUTH_PROXY_IPS", "127.0.0.1")
 
     client = Client()
-    client.defaults["HTTP_X_REMOTE_USER"] = "DOMAIN\\admin_user"
+    client.defaults["HTTP_X_IIS_WINDOWSAUTHTOKEN"] = "0xA11"
+    client.defaults["REMOTE_ADDR"] = "127.0.0.1"
     return client
 
 
@@ -51,18 +57,24 @@ def viewer_client(monkeypatch: pytest.MonkeyPatch) -> Client:
         "api.middleware.authorization.query_ldap_groups",
         mock_query_ldap_groups,
     )
+    monkeypatch.setattr(
+        "api.middleware.authentication.WindowsAuthIdentityResolver.resolve",
+        lambda _self, _token: "DOMAIN\\viewer_user",
+    )
     monkeypatch.setenv("AUTH_MODE", "iis")
+    monkeypatch.setenv("TRUSTED_AUTH_PROXY_IPS", "127.0.0.1")
 
     client = Client()
-    client.defaults["HTTP_X_REMOTE_USER"] = "DOMAIN\\viewer_user"
+    client.defaults["HTTP_X_IIS_WINDOWSAUTHTOKEN"] = "0xB22"
+    client.defaults["REMOTE_ADDR"] = "127.0.0.1"
     return client
 
 
 @pytest.fixture
 def unauthenticated_client(monkeypatch: pytest.MonkeyPatch) -> Client:
-    """Client with no authenticated REMOTE_USER identity."""
-    # Explicitly exercise IIS-mode unauthenticated behavior.
+    """Client with no authenticated IIS Windows auth token identity."""
     monkeypatch.setenv("AUTH_MODE", "iis")
+    monkeypatch.setenv("TRUSTED_AUTH_PROXY_IPS", "127.0.0.1")
     return Client()
 
 
@@ -78,8 +90,14 @@ def unauthorized_client(monkeypatch: pytest.MonkeyPatch) -> Client:
         "api.middleware.authorization.query_ldap_groups",
         mock_query_ldap_groups,
     )
+    monkeypatch.setattr(
+        "api.middleware.authentication.WindowsAuthIdentityResolver.resolve",
+        lambda _self, _token: "DOMAIN\\unauthorized_user",
+    )
     monkeypatch.setenv("AUTH_MODE", "iis")
+    monkeypatch.setenv("TRUSTED_AUTH_PROXY_IPS", "127.0.0.1")
 
     client = Client()
-    client.defaults["HTTP_X_REMOTE_USER"] = "DOMAIN\\unauthorized_user"
+    client.defaults["HTTP_X_IIS_WINDOWSAUTHTOKEN"] = "0xC33"
+    client.defaults["REMOTE_ADDR"] = "127.0.0.1"
     return client
