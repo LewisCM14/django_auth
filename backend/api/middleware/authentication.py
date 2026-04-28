@@ -32,9 +32,9 @@ class AuthenticationMiddleware:
     - Automatically creates/retrieves a Django User object
 
     In IIS mode (AUTH_MODE=iis):
-    - Reads the REMOTE_USER header provided by IIS
+    - Reads the X-Remote-User header provided by IIS
     - Creates or retrieves a Django User object via get_or_create
-    - Attaches AnonymousUser when REMOTE_USER is not present
+    - Attaches AnonymousUser when X-Remote-User is not present
     """
 
     def __init__(self, get_response: Callable[[HttpRequest], Any]) -> None:
@@ -69,9 +69,9 @@ class AuthenticationMiddleware:
         - Attaches the User to request.user
 
         In IIS mode:
-        - Reads REMOTE_USER from request.META (set by IIS)
+        - Reads X-Remote-User from request.META (set by IIS)
         - Creates or retrieves a Django User with that username
-        - Attaches AnonymousUser if REMOTE_USER is not present
+        - Attaches AnonymousUser if X-Remote-User is not present
 
         Args:
             request: The HTTP request object to authenticate.
@@ -148,5 +148,16 @@ class AuthenticationMiddleware:
                         action_attempted="authenticate X-Remote-User",
                         result="success",
                         user_identifier=remote_user,
+                    ),
+                )
+            elif request.META.get("HTTP_X_IIS_WINDOWSAUTHTOKEN"):
+                logger.warning(
+                    "X-IIS-WindowsAuthToken received without X-Remote-User; request remains anonymous",
+                    extra=build_security_event_fields(
+                        request,
+                        event_type="AUTHENTICATION_FAILURE",
+                        action_attempted="authenticate X-Remote-User",
+                        result="failure",
+                        user_identifier="anonymous",
                     ),
                 )

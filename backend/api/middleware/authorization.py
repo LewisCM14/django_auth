@@ -204,7 +204,7 @@ class AuthorizationMiddleware:
         """Ensure request has an authenticated user identity."""
         user = request.user
         if not user or not getattr(user, "is_authenticated", False):
-            raise AuthenticationFailed("User not authenticated (no REMOTE_USER).")
+            raise AuthenticationFailed("User not authenticated (no trusted identity).")
 
     def _get_authenticated_username(self, request: HttpRequest) -> str:
         """Return a validated username from an authenticated request."""
