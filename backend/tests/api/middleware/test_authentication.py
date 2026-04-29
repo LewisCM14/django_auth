@@ -110,9 +110,7 @@ class TestAuthenticationMiddlewareIISMode:
         request.META = {}
         request.user = None
 
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             middleware.process_request(request)
 
         assert request.user is not None

@@ -72,28 +72,6 @@ def validate_hostname(host: str) -> str:
     )
 
 
-def validate_ip_allowlist(raw_value: str, *, field_name: str) -> list[str]:
-    """Parse and validate a comma-separated allowlist of literal IP addresses."""
-    if not raw_value.strip():
-        return []
-
-    ips: list[str] = []
-    for item in raw_value.split(","):
-        ip_text = item.strip()
-        if not ip_text:
-            raise ImproperlyConfigured(
-                f"{field_name} contains an empty entry. Provide only explicit IP addresses."
-            )
-        try:
-            ip = ipaddress.ip_address(ip_text)
-        except ValueError as exc:
-            raise ImproperlyConfigured(
-                f"Invalid {field_name} entry '{ip_text}'. Expected a literal IP address."
-            ) from exc
-        ips.append(str(ip))
-    return ips
-
-
 def validate_allowed_hosts(raw_value: str) -> list[str]:
     """Parse and validate ``ALLOWED_HOSTS`` as an exact allowlist."""
 

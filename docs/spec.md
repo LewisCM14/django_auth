@@ -1210,7 +1210,6 @@ ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
 VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
 LDAP_SERVER_URI=ldaps://dc.corp.local
 LDAP_BASE_DN=DC=corp,DC=local
-TRUSTED_AUTH_PROXY_IPS=127.0.0.1
 LOG_FORMAT=json
 # optional hardening toggle
 SECURE_SSL_REDIRECT=true
@@ -1218,14 +1217,13 @@ SECURE_SSL_REDIRECT=true
 
 Notes:
 - `AUTH_MODE=iis` is mandatory for IIS token auth path.
-- `TRUSTED_AUTH_PROXY_IPS` is required in IIS mode and must contain literal IPs only.
 - Prefer `ldaps://` in production.
 
 **Sanity check (must pass):**
 
 ```powershell
 cd C:\apps\django_auth\backend
-python -c "from dotenv import load_dotenv; load_dotenv(); import os; print(os.getenv('AUTH_MODE'), os.getenv('TRUSTED_AUTH_PROXY_IPS'))"
+python -c "from dotenv import load_dotenv; load_dotenv(); import os; print(os.getenv('AUTH_MODE'))"
 ```
 
 Output must include `iis` and non-empty trusted proxy IPs.

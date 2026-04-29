@@ -18,7 +18,6 @@ from api.validation import (
     validate_allowed_hosts,
     validate_api_version,
     validate_cors_allowed_origins,
-    validate_ip_allowlist,
     validate_ldap_base_dn,
     validate_ldap_server_uri,
     validate_log_format,
@@ -139,17 +138,6 @@ LDAP_BASE_DN: str = validate_ldap_base_dn(LDAP_BASE_DN_RAW) if LDAP_BASE_DN_RAW 
 if AUTH_MODE == "iis" and (not LDAP_SERVER_URI or not LDAP_BASE_DN):
     raise ImproperlyConfigured(
         "LDAP_SERVER_URI and LDAP_BASE_DN are required when AUTH_MODE='iis'."
-    )
-
-TRUSTED_AUTH_PROXY_IPS_RAW: str = os.getenv(
-    "TRUSTED_AUTH_PROXY_IPS", "127.0.0.1"
-).strip()
-TRUSTED_AUTH_PROXY_IPS: list[str] = validate_ip_allowlist(
-    TRUSTED_AUTH_PROXY_IPS_RAW, field_name="TRUSTED_AUTH_PROXY_IPS"
-)
-if AUTH_MODE == "iis" and not TRUSTED_AUTH_PROXY_IPS:
-    raise ImproperlyConfigured(
-        "TRUSTED_AUTH_PROXY_IPS is required when AUTH_MODE='iis'."
     )
 
 # Security headers and cookie flags are explicit so production deployments
