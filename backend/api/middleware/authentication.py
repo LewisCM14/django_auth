@@ -29,23 +29,75 @@ WINDOWS_AUTH_TOKEN_META_KEY = "HTTP_X_IIS_WINDOWSAUTHTOKEN"
 _TOKEN_HEX_RE = re.compile(r"^(?:0x)?[0-9A-Fa-f]{1,16}$")
 
 if sys.platform.startswith("win"):
-    import win32api  # type: ignore[import-not-found]
-    import win32security  # type: ignore[import-not-found]
+    import win32api  # type: ignore[import-not-found]  # Justification: pywin32 is only available on Windows; safe due to runtime platform check.
+    import win32security  # type: ignore[import-not-found]  # Justification: pywin32 is only available on Windows; safe due to runtime platform check.
 else:
     win32api = None
     win32security = None
 
 
 class _Win32ApiModule(Protocol):
-    def GetUserName(self) -> str: ...
+    """
+    Protocol for the subset of win32api functions used for Windows authentication.
 
-    def CloseHandle(self, handle: int) -> None: ...
+    This protocol abstracts the pywin32 win32api module, allowing for type checking and
+    platform-agnostic code. It is used by the WindowsAuthIdentityResolver to impersonate
+    a Windows user and resolve their username from an IIS-provided token handle.
+
+    Methods:
+        GetUserName: Returns the current Windows username for the impersonated context.
+        CloseHandle: Closes a Windows handle (such as a token handle) to release system resources.
+    """
+
+    def GetUserName(self) -> str:
+        """
+        Return the username of the current Windows user context.
+
+        Used after impersonation to resolve the IIS-authenticated user's identity.
+        Returns the username in the format expected by the application (typically DOMAIN\\username).
+        """
+        ...
+
+    def CloseHandle(self, handle: int) -> None:
+        """
+        Close a Windows handle (such as a token handle) to release system resources.
+
+        Called after impersonation is complete to ensure proper cleanup and avoid handle leaks.
+        """
+        ...
 
 
 class _Win32SecurityModule(Protocol):
-    def ImpersonateLoggedOnUser(self, handle: int) -> None: ...
+    """
+    Protocol for the subset of win32security functions used for Windows authentication.
 
-    def RevertToSelf(self) -> None: ...
+    This protocol abstracts the pywin32 win32security module, allowing for type checking and
+    platform-agnostic code. It is used by the WindowsAuthIdentityResolver to impersonate
+    a Windows user based on an IIS-provided token handle and to revert the process context
+    after impersonation is complete.
+
+    Methods:
+        ImpersonateLoggedOnUser: Starts impersonation of the user identified by the token handle.
+        RevertToSelf: Reverts the process context to the original user after impersonation.
+    """
+
+    def ImpersonateLoggedOnUser(self, handle: int) -> None:
+        """
+        Begin impersonation of the Windows user identified by the given token handle.
+
+        Used to temporarily adopt the security context of the IIS-authenticated user so that
+        subsequent API calls (such as GetUserName) reflect the correct identity.
+        """
+        ...
+
+    def RevertToSelf(self) -> None:
+        """
+        Revert the process context to the original user after impersonation.
+
+        Called in a finally block to ensure the application does not remain in the impersonated
+        context, preserving security and isolation guarantees.
+        """
+        ...
 
 
 @dataclass(frozen=True)
@@ -56,13 +108,20 @@ class WindowsAuthIdentityResolver:
         """Resolve a username from the forwarded IIS auth token.
 
         Returns ``None`` when token parsing or impersonation fails.
+        Logs all failure cases except for expected invalid tokens, without logging sensitive values.
         """
         token_handle = _parse_token_handle(token_header_value)
         if token_handle is None:
+            logger.warning(
+                "failed to parse X-IIS-WindowsAuthToken: invalid format or value"
+            )
             return None
 
         modules = _load_pywin32_modules()
         if modules is None:
+            logger.error(
+                "pywin32 modules unavailable on Windows host; cannot resolve IIS auth token"
+            )
             return None
 
         win32api, win32security = modules
@@ -74,6 +133,9 @@ class WindowsAuthIdentityResolver:
             impersonation_started = True
             username = win32api.GetUserName()
         except OSError:
+            logger.exception(
+                "OSError during Windows impersonation or username resolution"
+            )
             return None
         finally:
             if impersonation_started:

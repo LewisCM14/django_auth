@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
 import logging
 from collections.abc import Coroutine
@@ -388,6 +389,27 @@ class TestWindowsAuthIdentityResolver:
     def test_resolve_returns_none_for_blank_header(self) -> None:
         resolver = authentication.WindowsAuthIdentityResolver()
         assert resolver.resolve("  ") is None
+
+
+def test_windows_platform_imports_pywin32_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Module imports pywin32 modules when running on Windows."""
+
+    fake_win32api = object()
+    fake_win32security = object()
+    monkeypatch.setitem(__import__("sys").modules, "win32api", fake_win32api)
+    monkeypatch.setitem(__import__("sys").modules, "win32security", fake_win32security)
+    monkeypatch.setattr(__import__("sys"), "platform", "win32")
+
+    reloaded = importlib.reload(authentication)
+
+    try:
+        assert reloaded.win32api is fake_win32api
+        assert reloaded.win32security is fake_win32security
+    finally:
+        monkeypatch.setattr(__import__("sys"), "platform", "linux")
+        importlib.reload(reloaded)
 
 
 class TestAuthenticationMiddlewareAsyncCompatibility:
