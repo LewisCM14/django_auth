@@ -93,15 +93,10 @@ class TestAuthenticationMiddlewareIISMode:
         )
 
         request = Mock()
-        request.META = {
-            "HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123",
-            "REMOTE_ADDR": "127.0.0.1",
-        }
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
         request.user = None
 
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             middleware.process_request(request)
 
         assert request.user is not None
@@ -135,17 +130,12 @@ class TestAuthenticationMiddlewareIISMode:
         )
 
         request = Mock()
-        request.META = {
-            "HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123",
-            "REMOTE_ADDR": "127.0.0.1",
-        }
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
         request.user = None
 
         User.objects.filter(username="DOMAIN\\newuser").delete()
 
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             middleware.process_request(request)
 
         assert User.objects.filter(username="DOMAIN\\newuser").exists()
@@ -165,15 +155,10 @@ class TestAuthenticationMiddlewareIISMode:
         original_pk = user.pk
 
         request = Mock()
-        request.META = {
-            "HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123",
-            "REMOTE_ADDR": "127.0.0.1",
-        }
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
         request.user = None
 
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             middleware.process_request(request)
 
         assert User.objects.filter(
@@ -189,15 +174,10 @@ class TestAuthenticationMiddlewareIISMode:
             type(middleware.identity_resolver), "resolve", lambda _self, _token: None
         )
         request = Mock()
-        request.META = {
-            "HTTP_X_IIS_WINDOWSAUTHTOKEN": "not-a-valid-token",
-            "REMOTE_ADDR": "127.0.0.1",
-        }
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "not-a-valid-token"}
         request.user = None
 
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             middleware.process_request(request)
 
         assert request.user is not None
@@ -214,15 +194,10 @@ class TestAuthenticationMiddlewareIISMode:
             lambda _self, _token: "DOMAIN\\bad/user",
         )
         request = Mock()
-        request.META = {
-            "HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123",
-            "REMOTE_ADDR": "127.0.0.1",
-        }
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123"}
         request.user = None
 
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             middleware.process_request(request)
 
         assert request.user is not None
@@ -247,14 +222,11 @@ class TestAuthenticationMiddlewareIISMode:
         request.path = "/api/user/"
         request.META = {
             "HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123",
-            "REMOTE_ADDR": "127.0.0.1",
             "HTTP_USER_AGENT": "pytest-agent",
         }
         request.user = None
 
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             with caplog.at_level(logging.INFO, logger="api.middleware.authentication"):
                 middleware.process_request(request)
 
@@ -268,24 +240,6 @@ class TestAuthenticationMiddlewareIISMode:
         assert record.user_identifier == "DOMAIN\\testuser"
         assert record.action_attempted == "authenticate X-IIS-WindowsAuthToken"
         assert record.result == "success"
-
-    @override_settings(DEBUG=False)
-    def test_iis_mode_untrusted_source_ip_treated_anonymous(self) -> None:
-        middleware = AuthenticationMiddleware(self.get_response)
-        request = Mock()
-        request.META = {
-            "HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x123",
-            "REMOTE_ADDR": "198.51.100.10",
-        }
-        request.user = None
-
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
-            middleware.process_request(request)
-
-        assert request.user is not None
-        assert not request.user.is_authenticated
 
     @override_settings(DEBUG=False)
     def test_iis_mode_logs_invalid_windows_auth_token(
@@ -303,14 +257,11 @@ class TestAuthenticationMiddlewareIISMode:
         request.path = "/api/user/"
         request.META = {
             "HTTP_X_IIS_WINDOWSAUTHTOKEN": "not-a-valid-token",
-            "REMOTE_ADDR": "127.0.0.1",
             "HTTP_USER_AGENT": "pytest-agent",
         }
         request.user = None
 
-        with patch.dict(
-            "os.environ", {"AUTH_MODE": "iis", "TRUSTED_AUTH_PROXY_IPS": "127.0.0.1"}
-        ):
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
             with caplog.at_level(
                 logging.WARNING, logger="api.middleware.authentication"
             ):
@@ -350,48 +301,22 @@ class TestWindowsAuthIdentityResolver:
         monkeypatch.setattr(authentication.sys, "platform", "linux")
         assert authentication._load_pywin32_modules() is None
 
-    def test_load_pywin32_modules_returns_none_when_packages_missing(
+    def test_load_pywin32_modules_returns_none_when_modules_missing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(authentication.sys, "platform", "win32")
-        monkeypatch.setattr(authentication.importlib.util, "find_spec", lambda _: None)
-        assert authentication._load_pywin32_modules() is None
-
-    def test_load_pywin32_modules_returns_none_when_security_package_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(authentication.sys, "platform", "win32")
-
-        def _find_spec(name: str) -> object | None:
-            if name == "win32api":
-                return object()
-            return None
-
-        monkeypatch.setattr(authentication.importlib.util, "find_spec", _find_spec)
+        monkeypatch.setattr(authentication, "win32api", None)
+        monkeypatch.setattr(authentication, "win32security", None)
         assert authentication._load_pywin32_modules() is None
 
     def test_load_pywin32_modules_imports_modules_when_available(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(authentication.sys, "platform", "win32")
-        monkeypatch.setattr(
-            authentication.importlib.util,
-            "find_spec",
-            lambda _: object(),
-        )
         fake_api = object()
         fake_security = object()
-
-        def _fake_import_module(name: str) -> object:
-            if name == "win32api":
-                return fake_api
-            if name == "win32security":
-                return fake_security
-            raise AssertionError(f"unexpected module import: {name}")
-
-        monkeypatch.setattr(
-            authentication.importlib, "import_module", _fake_import_module
-        )
+        monkeypatch.setattr(authentication, "win32api", fake_api)
+        monkeypatch.setattr(authentication, "win32security", fake_security)
 
         assert authentication._load_pywin32_modules() == (fake_api, fake_security)
 

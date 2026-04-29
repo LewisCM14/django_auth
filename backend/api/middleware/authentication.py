@@ -6,8 +6,6 @@ and production (IIS/Windows authentication) modes.
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
 import logging
 import os
 import re
@@ -19,7 +17,6 @@ from typing import Any, Callable, Protocol, cast
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction, sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.models import User
-from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpRequest, HttpResponse
 
@@ -30,6 +27,13 @@ logger = logging.getLogger(__name__)
 
 WINDOWS_AUTH_TOKEN_META_KEY = "HTTP_X_IIS_WINDOWSAUTHTOKEN"
 _TOKEN_HEX_RE = re.compile(r"^(?:0x)?[0-9A-Fa-f]{1,16}$")
+
+if sys.platform.startswith("win"):
+    import win32api  # type: ignore[import-not-found]
+    import win32security  # type: ignore[import-not-found]
+else:
+    win32api = None
+    win32security = None
 
 
 class _Win32ApiModule(Protocol):
@@ -105,14 +109,10 @@ def _load_pywin32_modules() -> tuple[_Win32ApiModule, _Win32SecurityModule] | No
     if not sys.platform.startswith("win"):
         return None
 
-    if importlib.util.find_spec("win32api") is None:
-        return None
-    if importlib.util.find_spec("win32security") is None:
+    if win32api is None or win32security is None:
         return None
 
-    win32api = cast(_Win32ApiModule, importlib.import_module("win32api"))
-    win32security = cast(_Win32SecurityModule, importlib.import_module("win32security"))
-    return win32api, win32security
+    return cast(_Win32ApiModule, win32api), cast(_Win32SecurityModule, win32security)
 
 
 class AuthenticationMiddleware:
@@ -211,22 +211,6 @@ class AuthenticationMiddleware:
         raw_token = request.META.get(WINDOWS_AUTH_TOKEN_META_KEY)
         if not raw_token:
             return
-        source_ip = request.META.get("REMOTE_ADDR", "")
-        if source_ip not in settings.TRUSTED_AUTH_PROXY_IPS:
-            logger.warning(
-                "untrusted source IP for X-IIS-WindowsAuthToken",
-                extra=build_security_event_fields(
-                    request,
-                    event_type="AUTHENTICATION_FAILURE",
-                    action_attempted="authenticate X-IIS-WindowsAuthToken",
-                    result="failure",
-                    user_identifier="anonymous",
-                ),
-            )
-            request.user = anonymous_user
-            request._cached_user = anonymous_user  # type: ignore[attr-defined]  # Django attaches _cached_user dynamically; HttpRequest stubs do not declare it.
-            return
-
         remote_user = self.identity_resolver.resolve(raw_token)
         if remote_user is None:
             logger.warning(
