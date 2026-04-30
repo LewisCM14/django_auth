@@ -29,6 +29,7 @@ DEV_USER_IDENTITY=dev_admin
 DEV_USER_ROLE=app_admin
 ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
 VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
+DB_ENGINE=sqlite
 ```
 
 Keep `ADMIN_AD_GROUP` and `VIEWER_AD_GROUP` populated in every environment. Dev mode does not query LDAP, but the values are validated at startup so deployment-specific `.env` files stay complete.
@@ -46,6 +47,32 @@ uv run python manage.py runserver
 ```
 
 The API will be available at `http://127.0.0.1:8000/`.
+
+
+### Database configuration
+
+The backend supports two database engines controlled by environment variables:
+
+- `DB_ENGINE=sqlite` (default in `AUTH_MODE=dev`)
+- `DB_ENGINE=mssql` (default in `AUTH_MODE=iis`)
+
+For persistent SQL Server storage, set the following in `backend/.env`:
+
+```env
+DB_ENGINE=mssql
+DB_HOST=sqlserver.corp.local
+DB_PORT=1433
+DB_NAME=django_auth
+DB_USER=django_auth_user
+DB_PASSWORD=change-me
+DB_OPTIONS_DRIVER=ODBC Driver 18 for SQL Server
+```
+
+Then run migrations:
+
+```bash
+uv run python manage.py migrate --noinput
+```
 
 ## API Documentation
 

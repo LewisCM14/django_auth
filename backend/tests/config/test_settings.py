@@ -77,6 +77,7 @@ class TestSettingsImportValidation:
     ) -> None:
         """Importing settings fails when IIS mode has no explicit ALLOWED_HOSTS."""
         monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("DB_ENGINE", "sqlite")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
         monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
         monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
@@ -85,6 +86,43 @@ class TestSettingsImportValidation:
         with patch("dotenv.load_dotenv", return_value=True):
             with pytest.raises(ImproperlyConfigured, match="ALLOWED_HOSTS"):
                 _load_settings_module("test_settings_missing_allowed_hosts_iis")
+
+    def test_mssql_database_config_loads_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MSSQL configuration is loaded when DB_ENGINE is mssql."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("DB_ENGINE", "mssql")
+        monkeypatch.setenv("DB_HOST", "sqlserver.corp.local")
+        monkeypatch.setenv("DB_NAME", "django_auth")
+        monkeypatch.setenv("DB_USER", "svc-user")
+        monkeypatch.setenv("DB_PASSWORD", "svc-pass")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            module = _load_settings_module("test_settings_mssql_database")
+
+        assert module.DATABASES["default"]["ENGINE"] == "mssql"
+        assert module.DATABASES["default"]["HOST"] == "sqlserver.corp.local"
+        assert module.DATABASES["default"]["OPTIONS"]["driver"] == (
+            "ODBC Driver 18 for SQL Server"
+        )
+
+    def test_mssql_database_config_missing_values_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Import fails fast when required MSSQL settings are missing."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("DB_ENGINE", "mssql")
+        monkeypatch.delenv("DB_HOST", raising=False)
+        monkeypatch.delenv("DB_NAME", raising=False)
+        monkeypatch.delenv("DB_USER", raising=False)
+        monkeypatch.delenv("DB_PASSWORD", raising=False)
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(ImproperlyConfigured, match="DB_HOST"):
+                _load_settings_module("test_settings_mssql_missing_values")
 
 
 class TestSettingsLoggingConfig:
@@ -177,6 +215,7 @@ class TestSettingsSecurityConfig:
     ) -> None:
         """IIS mode enables hardened transport and cookie settings."""
         monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("DB_ENGINE", "sqlite")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
         monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
         monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
@@ -217,6 +256,7 @@ class TestSettingsSecurityConfig:
     ) -> None:
         """SECURE_SSL_REDIRECT follows explicit environment opt-in."""
         monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("DB_ENGINE", "sqlite")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
         monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
         monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
@@ -284,6 +324,7 @@ class TestSettingsLdapConfig:
     ) -> None:
         """IIS mode requires LDAP_SERVER_URI and LDAP_BASE_DN at import time."""
         monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("DB_ENGINE", "sqlite")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
         monkeypatch.setenv("LDAP_SERVER_URI", "")
         monkeypatch.setenv("LDAP_BASE_DN", "")
@@ -300,6 +341,7 @@ class TestSettingsLdapConfig:
     ) -> None:
         """LDAP settings are available for the future real group lookup implementation."""
         monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("DB_ENGINE", "sqlite")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
         monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
         monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
@@ -315,6 +357,7 @@ class TestSettingsLdapConfig:
     ) -> None:
         """IIS mode rejects malformed LDAP server URIs."""
         monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("DB_ENGINE", "sqlite")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
         monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
         monkeypatch.setenv("LDAP_SERVER_URI", "http://dc.corp.local")
@@ -329,6 +372,7 @@ class TestSettingsLdapConfig:
     ) -> None:
         """IIS mode rejects malformed LDAP base DNs."""
         monkeypatch.setenv("AUTH_MODE", "iis")
+        monkeypatch.setenv("DB_ENGINE", "sqlite")
         monkeypatch.setenv("SECRET_KEY", "test-secret")
         monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
         monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")

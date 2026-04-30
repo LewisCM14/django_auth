@@ -11,6 +11,7 @@ dependencies = [
     "django-cors-headers==4.9.0",
     "ldap3==2.9.1",
     "python-dotenv==1.2.2",
+    "mssql-django==1.6",
     "uvicorn==0.46.0",
     "pywin32==311; platform_system == 'Windows'",
 ]

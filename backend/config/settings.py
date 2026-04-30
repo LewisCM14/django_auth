@@ -93,13 +93,43 @@ TEMPLATES = [
 
 ASGI_APPLICATION = "config.asgi.application"
 
-DATABASES = {
-    "default": {
-        # Django's built-in auth app persists User rows for REMOTE_USER identities.
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+DB_ENGINE: str = os.getenv("DB_ENGINE", "mssql" if AUTH_MODE == "iis" else "sqlite").strip().lower()
+
+if DB_ENGINE == "mssql":
+    DB_HOST: str = os.getenv("DB_HOST", "").strip()
+    DB_PORT: str = os.getenv("DB_PORT", "1433").strip()
+    DB_NAME: str = os.getenv("DB_NAME", "").strip()
+    DB_USER: str = os.getenv("DB_USER", "").strip()
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "").strip()
+    DB_OPTIONS_DRIVER: str = os.getenv("DB_OPTIONS_DRIVER", "ODBC Driver 18 for SQL Server").strip()
+
+    if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+        raise ImproperlyConfigured(
+            "DB_HOST, DB_NAME, DB_USER, and DB_PASSWORD are required when DB_ENGINE='mssql'."
+        )
+
+    DATABASES = {
+        "default": {
+            # Django's built-in auth app persists User rows for REMOTE_USER identities.
+            "ENGINE": "mssql",
+            "NAME": DB_NAME,
+            "USER": DB_USER,
+            "PASSWORD": DB_PASSWORD,
+            "HOST": DB_HOST,
+            "PORT": DB_PORT,
+            "OPTIONS": {"driver": DB_OPTIONS_DRIVER},
+        }
     }
-}
+elif DB_ENGINE == "sqlite":
+    DATABASES = {
+        "default": {
+            # SQLite remains available for local development only.
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
+else:
+    raise ImproperlyConfigured("DB_ENGINE must be either 'mssql' or 'sqlite'.")
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
