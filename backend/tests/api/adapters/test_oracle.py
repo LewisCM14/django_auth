@@ -508,7 +508,7 @@ class TestOracleAdapter:
         )
 
         with pytest.raises(ValueError, match="non-empty"):
-            adapter.fetch_all(123)  # type: ignore[arg-type]
+            adapter.fetch_all(123)  # type: ignore[arg-type]  # Intentional non-str SQL to verify runtime input validation.
 
     def test_fetch_all_rejects_statement_delimiter(self) -> None:
         cursor = FakeCursor(rows=[], description=[])
@@ -606,7 +606,7 @@ class TestOracleAdapter:
         )
 
         with pytest.raises(ValueError, match="mapping, a sequence, or None"):
-            adapter.fetch_all("SELECT invoice_id FROM invoices", 123)  # type: ignore[arg-type]
+            adapter.fetch_all("SELECT invoice_id FROM invoices", 123)  # type: ignore[arg-type]  # Intentional non-container params to verify runtime input validation.
 
     def test_fetch_all_rejects_overlong_string_parameter(self) -> None:
         cursor = FakeCursor(rows=[], description=[])

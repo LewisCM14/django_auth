@@ -1,7 +1,21 @@
 """Oracle adapter for reusable service-layer data access.
 
-Provides pooled, retry-aware, read-only SQL execution against Oracle and
-returns results as native Python dictionaries.
+This module is intentionally conservative and optimized for read-only BFF
+workloads where reliability, security, and observability matter more than raw
+query flexibility.
+
+For junior developers:
+- Start at ``create_oracle_adapter_from_env`` to see how runtime config is built.
+- Then read ``OracleAdapter.fetch_all`` and ``OracleAdapter.fetch_one``.
+- Notice the execution flow: validate input -> optional cache lookup -> execute
+    via pool -> retry transient failures -> cache result -> structured log.
+
+For senior developers:
+- Security invariants are enforced in ``_validate_read_query`` and
+    ``_validate_query_params``.
+- Reliability behavior is centralized in ``_run_with_retry``.
+- Logging semantics and cache behavior are isolated in helper methods, making
+    extension points explicit and testable.
 """
 
 from __future__ import annotations
@@ -18,7 +32,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Protocol, TypeVar, cast
+from typing import Protocol, cast
 
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
@@ -46,8 +60,12 @@ _TRANSIENT_ORACLE_ERROR_CODES = frozenset(
     }
 )
 _ORACLE_ERROR_CODE_RE = re.compile(r"ORA-(\d{5})")
-_ORACLE_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_#$]{0,127}$")
-_BIND_PARAM_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_ORACLE_USERNAME_RE = re.compile(
+    r"^[A-Za-z][\w#$]{0,127}$", re.ASCII
+)  # First char must be a letter; remaining chars may be word, #, or $ (max 128 total).
+_BIND_PARAM_NAME_RE = re.compile(
+    r"^[A-Za-z_]\w{0,63}$", re.ASCII
+)  # Bind name must start with letter/_ and then use word chars only (max 64 total).
 _TLS_DSN_PROTOCOL_RE = re.compile(r"\(PROTOCOL\s*=\s*TCPS\)", re.IGNORECASE)
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
@@ -56,6 +74,8 @@ _MAX_SQL_LENGTH = 20000
 _MAX_QUERY_PARAMS = 100
 _MAX_STRING_PARAM_LENGTH = 4000
 _MAX_BINARY_PARAM_LENGTH = 65535
+_ORACLE_READ_ACTION = "execute oracle read query"
+_ORACLE_READ_RESOURCE = "oracle:read"
 _DISALLOWED_ORACLE_USERNAMES = frozenset(
     {
         "SYS",
@@ -70,6 +90,13 @@ _DISALLOWED_ORACLE_USERNAMES = frozenset(
 
 
 class _OracleCursor(Protocol):
+    """Minimal cursor contract used by this adapter.
+
+    We intentionally type against a protocol rather than concrete driver
+    classes so tests can provide lightweight fakes and the adapter remains
+    decoupled from driver-specific implementation details.
+    """
+
     description: Sequence[Sequence[object]] | None
     arraysize: int
     prefetchrows: int
@@ -88,6 +115,8 @@ class _OracleCursor(Protocol):
 
 
 class _OracleConnection(Protocol):
+    """Minimal connection contract needed for read query execution."""
+
     call_timeout: int
 
     def cursor(self) -> _OracleCursor: ...
@@ -98,12 +127,20 @@ class _OracleConnection(Protocol):
 
 
 class _OraclePool(Protocol):
+    """Connection pool contract required by the adapter.
+
+    The adapter acquires connections per operation and force-closes the pool
+    during shutdown.
+    """
+
     def acquire(self) -> _OracleConnection: ...
 
     def close(self, force: bool = False) -> None: ...
 
 
 class _OracleDriver(Protocol):
+    """Subset of python-oracledb module surface used by this adapter."""
+
     DatabaseError: type[Exception]
     POOL_GETMODE_WAIT: object
 
@@ -111,6 +148,13 @@ class _OracleDriver(Protocol):
 
 
 def _load_oracle_driver() -> _OracleDriver:
+    """Import python-oracledb lazily and fail with actionable guidance.
+
+    Lazy import keeps module import side effects small for test environments
+    and ensures missing runtime dependencies surface as clear configuration
+    errors.
+    """
+
     try:
         driver_module = importlib.import_module("oracledb")
     except ModuleNotFoundError as exc:
@@ -122,6 +166,8 @@ def _load_oracle_driver() -> _OracleDriver:
 
 
 def _required_env(env: Mapping[str, str], name: str) -> str:
+    """Read a required environment variable and reject blank values."""
+
     value = env.get(name, "").strip()
     if not value:
         raise ImproperlyConfigured(
@@ -131,6 +177,13 @@ def _required_env(env: Mapping[str, str], name: str) -> str:
 
 
 def _validate_oracle_username(username: str) -> str:
+    """Validate Oracle username against strict format and privilege policy.
+
+    We enforce two invariants:
+    - Syntax must match a strict allowlist.
+    - High-privilege/system usernames are explicitly rejected.
+    """
+
     candidate = username.strip()
     if not _ORACLE_USERNAME_RE.fullmatch(candidate):
         raise ImproperlyConfigured(
@@ -146,6 +199,8 @@ def _validate_oracle_username(username: str) -> str:
 
 
 def _is_tls_dsn(dsn: str) -> bool:
+    """Return True when DSN indicates a TCPS/TLS transport."""
+
     candidate = dsn.strip()
     if candidate.lower().startswith("tcps://"):
         return True
@@ -153,6 +208,8 @@ def _is_tls_dsn(dsn: str) -> bool:
 
 
 def _validate_oracle_dsn(dsn: str, *, require_tls: bool) -> str:
+    """Validate DSN and optionally enforce TLS transport requirements."""
+
     candidate = dsn.strip()
     if require_tls and not _is_tls_dsn(candidate):
         raise ImproperlyConfigured(
@@ -168,6 +225,12 @@ def _int_env(
     *,
     minimum: int,
 ) -> int:
+    """Parse bounded integer config from environment.
+
+    Returns ``default`` for unset/blank values and raises
+    ``ImproperlyConfigured`` for invalid types or out-of-range values.
+    """
+
     raw = env.get(name)
     if raw is None or not raw.strip():
         return default
@@ -189,6 +252,8 @@ def _float_env(
     *,
     minimum: float,
 ) -> float:
+    """Parse bounded floating-point config from environment."""
+
     raw = env.get(name)
     if raw is None or not raw.strip():
         return default
@@ -208,6 +273,12 @@ def _bool_env(
     name: str,
     default: bool,
 ) -> bool:
+    """Parse strict allowlisted boolean config from environment.
+
+    Accepted values are limited to explicit truthy/falsey tokens so
+    misconfiguration fails fast instead of silently coercing values.
+    """
+
     raw = env.get(name)
     if raw is None or not raw.strip():
         return default
@@ -224,22 +295,34 @@ def _bool_env(
 
 
 def _query_id(statement: str) -> str:
+    """Create a short stable identifier for SQL statements.
+
+    Used in logs to correlate events without emitting raw SQL text.
+    """
+
     digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
     return digest[:12]
 
 
-def _canonicalize_query_params(params: OracleQueryParams) -> object:
-    if params is None:
-        return None
-    if isinstance(params, Mapping):
-        return {str(key): params[key] for key in sorted(params, key=str)}
-    return [item for item in params]
-
-
 def _cache_identifier(statement: str, params: OracleQueryParams) -> str:
+    """Build a deterministic cache identifier from SQL plus bind params.
+
+    The payload is normalized and hashed so semantically equivalent parameter
+    mappings produce the same cache key regardless of dict insertion order.
+    """
+    if params is None:
+        canonical_params: object = None
+    elif isinstance(params, Mapping):
+        canonical_params = {
+            str(key): value
+            for key, value in sorted(params.items(), key=lambda item: str(item[0]))
+        }
+    else:
+        canonical_params = list(params)
+
     payload = {
         "statement": statement,
-        "params": _canonicalize_query_params(params),
+        "params": canonical_params,
     }
     encoded = json.dumps(
         payload,
@@ -251,6 +334,12 @@ def _cache_identifier(statement: str, params: OracleQueryParams) -> str:
 
 
 def _validate_param_value(value: object) -> None:
+    """Validate a single bind parameter value against allowlisted scalar types.
+
+    This guard prevents accidental passing of complex objects that may be
+    implicitly serialized by a driver or fail unpredictably at runtime.
+    """
+
     allowed_types = (
         str,
         int,
@@ -283,25 +372,58 @@ def _validate_param_value(value: object) -> None:
         )
 
 
+def _normalize_named_params(params: Mapping[str, object]) -> dict[str, object]:
+    """Validate and normalize named bind parameters.
+
+    Keys must match the strict bind-name pattern and values must pass scalar
+    validation.
+    """
+
+    if len(params) > _MAX_QUERY_PARAMS:
+        raise ValueError(
+            f"Oracle query parameters exceed the maximum of {_MAX_QUERY_PARAMS}."
+        )
+
+    normalized: dict[str, object] = {}
+    for key, value in params.items():
+        if not isinstance(key, str) or not _BIND_PARAM_NAME_RE.fullmatch(key):
+            raise ValueError(
+                "Oracle named bind parameters must match ^[A-Za-z_][A-Za-z0-9_]{0,63}$."
+            )
+        _validate_param_value(value)
+        normalized[key] = value
+    return normalized
+
+
+def _normalize_positional_params(params: Sequence[object]) -> list[object]:
+    """Validate and normalize positional bind parameters as a concrete list."""
+
+    normalized_seq = list(params)
+    if len(normalized_seq) > _MAX_QUERY_PARAMS:
+        raise ValueError(
+            f"Oracle query parameters exceed the maximum of {_MAX_QUERY_PARAMS}."
+        )
+    for value in normalized_seq:
+        _validate_param_value(value)
+    return normalized_seq
+
+
 def _validate_query_params(params: OracleQueryParams) -> OracleQueryParams:
+    """Validate bind parameters against a strict, bounded allowlist.
+
+    Accepted forms:
+    - Mapping[str, scalar]
+    - Sequence[scalar]
+    - None
+
+    ``scalar`` is intentionally restricted to primitive/date/binary types to
+    avoid accidental object serialization behavior in the DB driver.
+    """
     if params is None:
         return None
 
     if isinstance(params, Mapping):
-        if len(params) > _MAX_QUERY_PARAMS:
-            raise ValueError(
-                f"Oracle query parameters exceed the maximum of {_MAX_QUERY_PARAMS}."
-            )
-
-        normalized: dict[str, object] = {}
-        for key, value in params.items():
-            if not isinstance(key, str) or not _BIND_PARAM_NAME_RE.fullmatch(key):
-                raise ValueError(
-                    "Oracle named bind parameters must match ^[A-Za-z_][A-Za-z0-9_]{0,63}$."
-                )
-            _validate_param_value(value)
-            normalized[key] = value
-        return normalized
+        return _normalize_named_params(params)
 
     if isinstance(params, (str, bytes, bytearray)):
         raise ValueError(
@@ -309,19 +431,14 @@ def _validate_query_params(params: OracleQueryParams) -> OracleQueryParams:
         )
 
     if isinstance(params, Sequence):
-        normalized_seq = list(params)
-        if len(normalized_seq) > _MAX_QUERY_PARAMS:
-            raise ValueError(
-                f"Oracle query parameters exceed the maximum of {_MAX_QUERY_PARAMS}."
-            )
-        for value in normalized_seq:
-            _validate_param_value(value)
-        return normalized_seq
+        return _normalize_positional_params(params)
 
     raise ValueError("Oracle query parameters must be a mapping, a sequence, or None.")
 
 
 def _extract_oracle_error_code(exc: Exception) -> int | None:
+    """Extract Oracle error code from driver exception payload when available."""
+
     details = exc.args[0] if exc.args else exc
     code = getattr(details, "code", None)
     if isinstance(code, int):
@@ -334,11 +451,21 @@ def _extract_oracle_error_code(exc: Exception) -> int | None:
 
 
 def _is_read_query(sql: str) -> bool:
+    """Return True when the SQL statement starts with SELECT or WITH."""
+
     token = sql.split(None, 1)[0].upper()
     return token in {"SELECT", "WITH"}
 
 
 def _validate_read_query(sql: str) -> str:
+    """Enforce a single, read-only SQL statement.
+
+    Constraints are strict by design:
+    - Input must be a non-empty string.
+    - Statement length is bounded.
+    - NUL bytes and statement delimiters are rejected.
+    - Only SELECT/WITH statements are permitted.
+    """
     if not isinstance(sql, str):
         raise ValueError("SQL statement must be a non-empty string.")
 
@@ -364,6 +491,12 @@ def _validate_read_query(sql: str) -> str:
 
 
 def _column_names(description: Sequence[Sequence[object]] | None) -> list[str]:
+    """Derive normalized lowercase column names from cursor description.
+
+    Falls back to ``column_N`` placeholders for missing or empty names so row
+    mapping remains deterministic.
+    """
+
     if not description:
         return []
 
@@ -378,12 +511,19 @@ def _column_names(description: Sequence[Sequence[object]] | None) -> list[str]:
 
 
 def _row_to_dict(columns: Sequence[str], row: Sequence[object]) -> OracleRow:
-    return {column: value for column, value in zip(columns, row)}
+    """Map a fetched row sequence to a column-name dictionary."""
+
+    return dict(zip(columns, row))
 
 
 @dataclass(frozen=True, slots=True)
 class OracleAdapterConfig:
-    """Runtime configuration for OracleAdapter."""
+    """Runtime configuration for OracleAdapter.
+
+    Each field maps to an ``ORACLE_*`` environment variable (directly or via
+    defaults). This dataclass is immutable so runtime behavior remains stable
+    after adapter construction.
+    """
 
     username: str
     password: str
@@ -416,6 +556,10 @@ class OracleAdapterConfig:
         - ORACLE_USERNAME
         - ORACLE_PASSWORD
         - ORACLE_DSN
+
+        Raises:
+            ImproperlyConfigured: If required values are missing or any value
+            violates type/range/security constraints.
         """
 
         environment = env if env is not None else os.environ
@@ -480,14 +624,22 @@ class OracleAdapterConfig:
         )
 
 
-_T = TypeVar("_T")
-
-
 class OracleAdapter:
     """Reusable Oracle data adapter intended for the service layer.
 
     The adapter is read-only by design so BFF services can safely execute
     parameterized SELECT/WITH queries and receive native Python objects.
+
+    Execution model:
+    1. Validate SQL and bind parameters.
+    2. Attempt cache read when enabled.
+    3. Acquire pooled connection and execute query.
+    4. Retry only transient driver errors.
+    5. Cache successful result when enabled.
+    6. Emit structured success/failure logs.
+
+    The async methods are wrappers around the same sync logic so behavior,
+    validation, and logging semantics stay identical in WSGI and ASGI paths.
     """
 
     def __init__(
@@ -496,6 +648,16 @@ class OracleAdapter:
         *,
         driver: _OracleDriver | None = None,
     ) -> None:
+        """Create an Oracle adapter and initialize its connection pool.
+
+        Args:
+            config: Immutable adapter runtime configuration.
+            driver: Optional injected driver for tests or custom runtime wiring.
+
+        Raises:
+            ImproperlyConfigured: If username/DSN validation fails.
+        """
+
         self.config = config
         self._driver = driver if driver is not None else _load_oracle_driver()
         _validate_oracle_username(self.config.username)
@@ -527,7 +689,10 @@ class OracleAdapter:
         sql: str,
         params: OracleQueryParams = None,
     ) -> list[OracleRow]:
-        """Execute a read-only query and return all rows as dictionaries."""
+        """Execute a read-only query and return all rows as dictionaries.
+
+        This is the primary query path for list-style reads.
+        """
         statement = _validate_read_query(sql)
         validated_params = _validate_query_params(params)
         statement_id = _query_id(statement)
@@ -550,6 +715,8 @@ class OracleAdapter:
                 return rows
 
         def _operation() -> list[OracleRow]:
+            # Keep low-level driver tuning in one place so performance changes
+            # remain explicit and easy to review.
             with self._pool.acquire() as connection:
                 connection.call_timeout = self.config.call_timeout_ms
                 with connection.cursor() as cursor:
@@ -580,7 +747,10 @@ class OracleAdapter:
         sql: str,
         params: OracleQueryParams = None,
     ) -> OracleRow | None:
-        """Execute a read-only query and return the first row, if any."""
+        """Execute a read-only query and return the first row, if any.
+
+        This path mirrors ``fetch_all`` but is optimized for detail lookups.
+        """
         statement = _validate_read_query(sql)
         validated_params = _validate_query_params(params)
         statement_id = _query_id(statement)
@@ -656,20 +826,29 @@ class OracleAdapter:
         """Async wrapper for close suitable for async shutdown hooks."""
         await sync_to_async(self.close, thread_sensitive=False)()
 
-    def _run_with_retry(
+    def _run_with_retry[T](
         self,
-        operation: Callable[[], _T],
+        operation: Callable[[], T],
         *,
         statement_id: str,
-    ) -> _T:
+    ) -> T:
+        """Run a query operation with bounded retries for transient errors.
+
+        Retry policy:
+        - Retry only known transient ORA codes.
+        - Use exponential backoff based on ``retry_backoff_seconds``.
+        - Log every retry and terminal failure with structured metadata.
+
+        Non-driver exceptions are not retried and are logged once before being
+        re-raised to preserve original failure semantics.
+        """
         for attempt in range(1, self.config.max_retry_attempts + 1):
             try:
                 return operation()
             except self._driver.DatabaseError as exc:
                 error_code = _extract_oracle_error_code(exc)
                 retryable = (
-                    error_code is not None
-                    and error_code in _TRANSIENT_ORACLE_ERROR_CODES
+                    error_code in _TRANSIENT_ORACLE_ERROR_CODES
                     and attempt < self.config.max_retry_attempts
                 )
                 if not retryable:
@@ -678,9 +857,9 @@ class OracleAdapter:
                         extra=build_security_event_fields(
                             None,
                             event_type="ORACLE_QUERY_FAILURE",
-                            action_attempted="execute oracle read query",
+                            action_attempted=_ORACLE_READ_ACTION,
                             result="failure",
-                            resource_accessed="oracle:read",
+                            resource_accessed=_ORACLE_READ_RESOURCE,
                             request_id=request_id_var.get(),
                             status_code=500,
                             exception_type=exc.__class__.__name__,
@@ -691,15 +870,15 @@ class OracleAdapter:
                     )
                     raise
 
-                sleep_seconds = self.config.retry_backoff_seconds * (2 ** (attempt - 1))
+                sleep_seconds = self.config.retry_backoff_seconds * pow(2, attempt - 1)
                 logger.warning(
                     "transient oracle error; retrying query",
                     extra=build_security_event_fields(
                         None,
                         event_type="ORACLE_QUERY_RETRY",
-                        action_attempted="execute oracle read query",
+                        action_attempted=_ORACLE_READ_ACTION,
                         result="failure",
-                        resource_accessed="oracle:read",
+                        resource_accessed=_ORACLE_READ_RESOURCE,
                         request_id=request_id_var.get(),
                         exception_type=exc.__class__.__name__,
                         oracle_query_id=statement_id,
@@ -715,9 +894,9 @@ class OracleAdapter:
                     extra=build_security_event_fields(
                         None,
                         event_type="ORACLE_QUERY_FAILURE",
-                        action_attempted="execute oracle read query",
+                        action_attempted=_ORACLE_READ_ACTION,
                         result="failure",
-                        resource_accessed="oracle:read",
+                        resource_accessed=_ORACLE_READ_RESOURCE,
                         request_id=request_id_var.get(),
                         status_code=500,
                         exception_type=exc.__class__.__name__,
@@ -738,12 +917,14 @@ class OracleAdapter:
         statement: str,
         params: OracleQueryParams,
     ) -> str | None:
+        """Return adapter cache key when caching is enabled, else ``None``."""
         if not self.config.cache_enabled:
             return None
         identifier = _cache_identifier(statement, params)
         return adapter_key("oracle", operation, identifier)
 
     def _cache_get(self, cache_key: str) -> object:
+        """Read cached value and fail open on cache backend errors."""
         try:
             return cache.get(cache_key, _CACHE_MISS)
         except Exception as exc:  # pragma: no cover - defensive fail-open guard
@@ -763,6 +944,7 @@ class OracleAdapter:
             return _CACHE_MISS
 
     def _cache_set(self, cache_key: str, value: object) -> None:
+        """Write cached value and fail open on cache backend errors."""
         try:
             cache.set(
                 cache_key,
@@ -794,14 +976,15 @@ class OracleAdapter:
         cache_hit: bool,
         cache_key: str | None,
     ) -> None:
+        """Emit a structured success log for query observability."""
         logger.info(
             "oracle query completed",
             extra=build_security_event_fields(
                 None,
                 event_type="ORACLE_QUERY_SUCCESS",
-                action_attempted="execute oracle read query",
+                action_attempted=_ORACLE_READ_ACTION,
                 result="success",
-                resource_accessed="oracle:read",
+                resource_accessed=_ORACLE_READ_RESOURCE,
                 request_id=request_id_var.get(),
                 duration_ms=duration_ms,
                 oracle_query_id=statement_id,
@@ -819,5 +1002,13 @@ def create_oracle_adapter_from_env(
     *,
     driver: _OracleDriver | None = None,
 ) -> OracleAdapter:
-    """Create a reusable OracleAdapter using ORACLE_* environment variables."""
+    """Create an OracleAdapter from ORACLE_* environment variables.
+
+    Args:
+        driver: Optional injected driver, mainly for testing.
+
+    Returns:
+        Configured OracleAdapter instance with initialized pool.
+    """
+
     return OracleAdapter(OracleAdapterConfig.from_env(), driver=driver)

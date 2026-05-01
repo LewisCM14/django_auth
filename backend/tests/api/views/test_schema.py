@@ -34,11 +34,14 @@ class TestSchemaEndpoints:
         )
 
     @pytest.mark.django_db
-    def test_schema_includes_health_and_user_paths(self, admin_client: Client) -> None:
-        """GET /api/schema/ includes the application endpoints."""
+    def test_schema_includes_health_user_and_invoice_paths(
+        self, admin_client: Client
+    ) -> None:
+        """GET /api/schema/ includes core application endpoint paths."""
         response = admin_client.get("/api/schema/")
         assert response.status_code == 200
         assert b"/api/health/" in response.content
+        assert b"/api/invoices/" in response.content
         assert b"/api/user/" in response.content
 
     @pytest.mark.django_db
