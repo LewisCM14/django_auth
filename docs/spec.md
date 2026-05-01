@@ -296,7 +296,7 @@ sequenceDiagram
 ---
 title: Authorization Policy — Level 1
 ---
-flowchart TD
+flowchart LR
     START(["Request reaches AuthorizationMiddleware"])
     READ["`Read view @authz_* decorator`"]
 
@@ -309,7 +309,6 @@ flowchart TD
     PUBLIC -- no --> AUTHN{"`@authz_authenticated?`"}
     AUTHN -- yes --> CHK_USER{"`X-IIS-WindowsAuthToken
 present?`"}
-present?`"}
     CHK_USER -- no --> R401A["`401 JSON envelope
 + request_id`"]
     CHK_USER -- yes --> PASS_AUTHN["`Forward to view
@@ -317,7 +316,6 @@ present?`"}
 
     AUTHN -- no --> ROLES{"`@authz_roles(...)?`"}
     ROLES -- yes --> CHK_USER2{"`X-IIS-WindowsAuthToken
-present?`"}
 present?`"}
     CHK_USER2 -- no --> R401B["`401 JSON envelope
 + request_id`"]
