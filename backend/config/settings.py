@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from api.validation import (
     validate_allowed_hosts,
     validate_api_version,
+    validate_bool_env,
     validate_cors_allowed_origins,
     validate_ldap_base_dn,
     validate_ldap_server_uri,
@@ -36,7 +37,7 @@ SECRET_KEY: str = os.getenv("SECRET_KEY", "")
 if not SECRET_KEY:
     raise ImproperlyConfigured("SECRET_KEY is required.")
 
-DEBUG: bool = os.getenv("DEBUG", "False").strip().lower() == "true"
+DEBUG: bool = validate_bool_env(os.getenv("DEBUG", "false"), field_name="DEBUG")
 
 ALLOWED_HOSTS_RAW: str = os.getenv("ALLOWED_HOSTS", "")
 ALLOWED_HOSTS: list[str] = validate_allowed_hosts(ALLOWED_HOSTS_RAW)
@@ -145,8 +146,9 @@ if AUTH_MODE == "iis" and (not LDAP_SERVER_URI or not LDAP_BASE_DN):
 SECURE_PROXY_SSL_HEADER: tuple[str, str] | None = (
     ("HTTP_X_FORWARDED_PROTO", "https") if AUTH_MODE == "iis" else None
 )
-SECURE_SSL_REDIRECT: bool = (
-    os.getenv("SECURE_SSL_REDIRECT", "false").strip().lower() == "true"
+SECURE_SSL_REDIRECT: bool = validate_bool_env(
+    os.getenv("SECURE_SSL_REDIRECT", "true" if AUTH_MODE == "iis" else "false"),
+    field_name="SECURE_SSL_REDIRECT",
 )
 SECURE_HSTS_SECONDS: int = 31536000 if AUTH_MODE == "iis" else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS: bool = AUTH_MODE == "iis"
@@ -160,6 +162,10 @@ SESSION_COOKIE_SAMESITE: str = "Lax"
 CSRF_COOKIE_SECURE: bool = AUTH_MODE == "iis"
 CSRF_COOKIE_HTTPONLY: bool = True
 CSRF_COOKIE_SAMESITE: str = "Lax"
+AUTHZ_HIDE_FORBIDDEN_AS_NOT_FOUND: bool = validate_bool_env(
+    os.getenv("AUTHZ_HIDE_FORBIDDEN_AS_NOT_FOUND", "false"),
+    field_name="AUTHZ_HIDE_FORBIDDEN_AS_NOT_FOUND",
+)
 CONTENT_SECURITY_POLICY: str = (
     "default-src 'none'; "
     "base-uri 'none'; "

@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 WINDOWS_AUTH_TOKEN_META_KEY = "HTTP_X_IIS_WINDOWSAUTHTOKEN"
 _TOKEN_HEX_RE = re.compile(r"^(?:0x)?[0-9A-Fa-f]{1,16}$")
+_MAX_WINDOWS_AUTH_TOKEN_HEADER_LENGTH = 18
 
 if sys.platform.startswith("win"):
     import win32api  # type: ignore[import-not-found]  # Justification: pywin32 is only available on Windows; safe due to runtime platform check.
@@ -153,7 +154,13 @@ class WindowsAuthIdentityResolver:
 
 def _parse_token_handle(token_header_value: str) -> int | None:
     """Convert IIS token string to a Windows handle int."""
+    if not isinstance(token_header_value, str):
+        return None
+
     candidate = token_header_value.strip()
+    if not candidate or len(candidate) > _MAX_WINDOWS_AUTH_TOKEN_HEADER_LENGTH:
+        return None
+
     if not _TOKEN_HEX_RE.fullmatch(candidate):
         return None
 
@@ -271,8 +278,37 @@ class AuthenticationMiddleware:
     ) -> None:
         """Authenticate using X-IIS-WindowsAuthToken forwarded by IIS."""
         raw_token = request.META.get(WINDOWS_AUTH_TOKEN_META_KEY)
-        if not raw_token:
+        if raw_token is None:
             return
+        if not isinstance(raw_token, str):
+            logger.warning(
+                "invalid X-IIS-WindowsAuthToken rejected: non-string header",
+                extra=build_security_event_fields(
+                    request,
+                    event_type="INPUT_VALIDATION_FAILURE",
+                    action_attempted="validate X-IIS-WindowsAuthToken",
+                    result="failure",
+                    user_identifier="anonymous",
+                ),
+            )
+            request.user = anonymous_user
+            request._cached_user = anonymous_user  # type: ignore[attr-defined]  # Django attaches _cached_user dynamically; HttpRequest stubs do not declare it.
+            return
+        if len(raw_token.strip()) > _MAX_WINDOWS_AUTH_TOKEN_HEADER_LENGTH:
+            logger.warning(
+                "invalid X-IIS-WindowsAuthToken rejected: header length exceeded",
+                extra=build_security_event_fields(
+                    request,
+                    event_type="INPUT_VALIDATION_FAILURE",
+                    action_attempted="validate X-IIS-WindowsAuthToken",
+                    result="failure",
+                    user_identifier="anonymous",
+                ),
+            )
+            request.user = anonymous_user
+            request._cached_user = anonymous_user  # type: ignore[attr-defined]  # Django attaches _cached_user dynamically; HttpRequest stubs do not declare it.
+            return
+
         remote_user = self.identity_resolver.resolve(raw_token)
         if remote_user is None:
             logger.warning(

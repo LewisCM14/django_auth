@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 AUTHZ_ERROR_DETAILS: dict[int, str] = {
     401: "Authentication credentials were not provided.",
     403: "You do not have permission to perform this action.",
+    404: "Not found.",
     500: "An unexpected error occurred.",
 }
 
@@ -191,10 +192,16 @@ class AuthorizationMiddleware:
 
     def _error_response(self, status_code: int) -> JsonResponse:
         """Build a standardized JSON error envelope with request correlation."""
-        detail = AUTHZ_ERROR_DETAILS[status_code]
+        response_status = status_code
+        if status_code == 403 and getattr(
+            settings, "AUTHZ_HIDE_FORBIDDEN_AS_NOT_FOUND", False
+        ):
+            response_status = 404
+
+        detail = AUTHZ_ERROR_DETAILS[response_status]
         return JsonResponse(
             {"detail": detail, "request_id": request_id_var.get()},
-            status=status_code,
+            status=response_status,
         )
 
     def _get_view_attr(self, view_func: Any, attr: str, expected_type: type) -> Any:
