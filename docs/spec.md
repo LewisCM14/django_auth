@@ -204,7 +204,6 @@ ruff >= 0.15.9`"]
 
 1. Source Adapter Layer
     - One adapter per external source.
-    - Provides a reusable Oracle adapter (`api/adapters/oracle.py`) for pooled, retry-aware, read-only SQL access from the service layer.
     - Handles source-specific authentication, request/response contracts, retries, and error mapping.
     - Performs minimal parsing: converts raw responses to native Python structures, handles protocol-level details, and validates required fields, but does not apply business rules or normalization (handled in the application & mapping layer).
     - Logs external call lifecycle (start, response status, retries, failures) at appropriate levels (`INFO` / `WARNING` / `ERROR`). Request-ID correlation is automatic.
@@ -375,8 +374,7 @@ backend/
 │   │   ├── health.py
 │   │   └── user.py
 │   ├── adapters/
-│   │   ├── __init__.py
-│   │   └── oracle.py
+│   │   └── __init__.py
 │   └── migrations/
 ├── config/
 │     ├── __init__.py
@@ -388,10 +386,6 @@ backend/
 │   ├── __init__.py
 │   ├── conftest.py
 │   ├── api/
-│   │   ├── __init__.py
-│   │   ├── adapters/
-│   │   │   ├── __init__.py
-│   │   │   └── test_oracle.py
 │   │   ├── middleware/
 │   │   │   ├── __init__.py
 │   │   │   ├── test_authentication.py
@@ -459,7 +453,6 @@ backend/
 | `api/request_user.py`               | Cross-cutting        | Helper for resolving the middleware-attached request user across DRF wrappers and request logging |
 | `api/services/`                     | Service              | Business logic, orchestration, state machines, normalization & mapping |
 | `api/adapters/`                     | Source Adapter       | External data-source access with resilience patterns |
-| `api/adapters/oracle.py`            | Source Adapter       | Reusable pooled Oracle adapter for parameterized read-only SQL queries (`fetch_all` / `fetch_one`) returning native Python dictionaries, with structured security logging and optional adapter-result caching |
 | `api/migrations/`                   | Persistence          | Django migration history |
 | `config/`                           | Cross-cutting        | Django and app configuration (settings, ASGI, logging, etc.) |
 | `config/logging.py`                 | Cross-cutting        | `JsonFormatter` — custom `logging.Formatter` subclass for UTC JSON output and structured security fields |
