@@ -121,12 +121,24 @@ class TestBuildSecurityEventFields:
 class TestSecurityLoggingHelpers:
     """Tests for the internal helper functions."""
 
-    def test_resolve_source_ip_prefers_forwarded_for(self) -> None:
-        """The first forwarded-for IP is preferred when present."""
+    def test_resolve_source_ip_prefers_remote_addr_when_hop_not_trusted(self) -> None:
+        """Forwarded-for is ignored unless the immediate hop is trusted."""
         request = _make_request(
             meta={
                 "HTTP_X_FORWARDED_FOR": "198.51.100.1, 203.0.113.10",
                 "REMOTE_ADDR": "203.0.113.10",
+                "HTTP_USER_AGENT": "pytest-agent",
+            }
+        )
+
+        assert _resolve_source_ip(request) == "203.0.113.10"
+
+    def test_resolve_source_ip_uses_forwarded_for_from_loopback_hop(self) -> None:
+        """Forwarded-for is trusted when the request is proxied from loopback."""
+        request = _make_request(
+            meta={
+                "HTTP_X_FORWARDED_FOR": "198.51.100.1, 127.0.0.1",
+                "REMOTE_ADDR": "127.0.0.1",
                 "HTTP_USER_AGENT": "pytest-agent",
             }
         )

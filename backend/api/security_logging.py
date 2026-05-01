@@ -113,17 +113,19 @@ def _resolve_source_ip(request: HttpRequest | None) -> str:
         return "-"
 
     request_meta = getattr(request, "__dict__", {}).get("META") or {}
-    candidate = _first_forwarded_for(request_meta.get("HTTP_X_FORWARDED_FOR"))
-    if candidate is None:
-        candidate = request_meta.get("REMOTE_ADDR")
-
-    if not isinstance(candidate, str) or not candidate.strip():
+    remote_ip = _parse_ip(request_meta.get("REMOTE_ADDR"))
+    if remote_ip is None:
         return "-"
 
-    try:
-        return str(ipaddress.ip_address(candidate.strip()))
-    except ValueError:
-        return "-"
+    # Only trust X-Forwarded-For when the immediate hop is local IIS.
+    if remote_ip.is_loopback:
+        forwarded_ip = _parse_ip(
+            _first_forwarded_for(request_meta.get("HTTP_X_FORWARDED_FOR"))
+        )
+        if forwarded_ip is not None:
+            return str(forwarded_ip)
+
+    return str(remote_ip)
 
 
 def _resolve_user_agent(request: HttpRequest | None) -> str:
@@ -153,3 +155,12 @@ def _first_forwarded_for(value: object) -> str | None:
         return None
     first_value = value.split(",", 1)[0].strip()
     return first_value or None
+
+
+def _parse_ip(value: object) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
