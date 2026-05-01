@@ -111,6 +111,32 @@ class TestJsonFormatter:
         assert output["status_code"] == 200
         assert output["duration_ms"] == 12.3
 
+    def test_includes_oracle_adapter_fields(self, formatter: JsonFormatter) -> None:
+        """Oracle adapter extras are preserved in JSON output."""
+        record = _make_record(
+            "oracle query completed",
+            request_id="req-oracle-1",
+            event_type="ORACLE_QUERY_SUCCESS",
+            action_attempted="execute oracle read query",
+            result="success",
+            resource_accessed="oracle:read",
+            oracle_query_id="abc123def456",
+            oracle_row_count=2,
+            oracle_cache_hit=True,
+            oracle_cache_key="adapter:oracle:fetch_all:abc123",
+            oracle_cache_ttl_seconds=45,
+            duration_ms=9.1,
+        )
+        output = json.loads(formatter.format(record))
+
+        assert output["event_type"] == "ORACLE_QUERY_SUCCESS"
+        assert output["oracle_query_id"] == "abc123def456"
+        assert output["oracle_row_count"] == 2
+        assert output["oracle_cache_hit"] is True
+        assert output["oracle_cache_key"] == "adapter:oracle:fetch_all:abc123"
+        assert output["oracle_cache_ttl_seconds"] == 45
+        assert output["duration_ms"] == 9.1
+
     def test_format_time_honors_custom_datefmt(self, formatter: JsonFormatter) -> None:
         """Custom date formats use the UTC timestamp branch."""
         record = _make_record("msg")

@@ -13,6 +13,19 @@ import logging
 
 from api.security_logging import SECURITY_EXTRA_FIELDS
 
+ORACLE_EXTRA_FIELDS: tuple[str, ...] = (
+    "oracle_query_id",
+    "oracle_row_count",
+    "oracle_error_code",
+    "oracle_attempt",
+    "oracle_sleep_seconds",
+    "oracle_cache_key",
+    "oracle_cache_hit",
+    "oracle_cache_ttl_seconds",
+)
+
+STRUCTURED_EXTRA_FIELDS: tuple[str, ...] = SECURITY_EXTRA_FIELDS + ORACLE_EXTRA_FIELDS
+
 
 class JsonFormatter(logging.Formatter):
     """JSON log formatter for structured, machine-parseable log output.
@@ -32,7 +45,7 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
 
-        for field_name in SECURITY_EXTRA_FIELDS:
+        for field_name in STRUCTURED_EXTRA_FIELDS:
             value = getattr(record, field_name, None)
             if value is not None:
                 payload[field_name] = value

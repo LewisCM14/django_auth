@@ -38,3 +38,19 @@ The services layer then:
 - Maps external identifiers to application roles/permissions
 - Returns a canonical response object for the API view
 """
+
+from api.adapters.oracle import (
+    OracleAdapter,
+    OracleAdapterConfig,
+    OracleQueryParams,
+    OracleRow,
+    create_oracle_adapter_from_env,
+)
+
+__all__ = [
+    "OracleAdapter",
+    "OracleAdapterConfig",
+    "OracleQueryParams",
+    "OracleRow",
+    "create_oracle_adapter_from_env",
+]

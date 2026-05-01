@@ -1150,6 +1150,25 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `ALLOWED_HOSTS`          | Yes      | Comma-separated hosts    | —           | Django `ALLOWED_HOSTS` setting. |
 | `CORS_ALLOWED_ORIGINS`   | No       | Comma-separated origins  | —           | Origins permitted for cross-origin requests. Omit if frontend is same-origin. |
 | `SECRET_KEY`             | Yes      | String                   | —           | Django secret key. Must be unique and unpredictable in production. |
+| `ORACLE_USERNAME`        | Adapter only | Strict Oracle identifier (`^[A-Za-z][A-Za-z0-9_#$]{0,127}$`) | — | Oracle DB username used by `OracleAdapterConfig.from_env()`. Must be a least-privilege application account (system accounts are rejected). |
+| `ORACLE_PASSWORD`        | Adapter only | String                | —           | Oracle DB password used by `OracleAdapterConfig.from_env()` when Oracle-backed services are enabled. |
+| `ORACLE_DSN`             | Adapter only | Oracle DSN / connect descriptor | — | Oracle DSN used by the Oracle adapter. When `ORACLE_REQUIRE_TLS=true` (default), DSN must use TCPS (`tcps://...` or `(PROTOCOL=TCPS)` in descriptor syntax). |
+| `ORACLE_REQUIRE_TLS`     | No       | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` | `true` | Enforces TLS-only Oracle DSN validation. |
+| `ORACLE_SSL_SERVER_DN_MATCH` | No   | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` | `true` | Enables Oracle server DN matching when TLS is required. |
+| `ORACLE_POOL_MIN_CONNECTIONS` | No | Integer                | `4`         | Lower bound for Oracle connection pool size. |
+| `ORACLE_POOL_MAX_CONNECTIONS` | No | Integer                | `30`        | Upper bound for Oracle connection pool size; tune for endpoint concurrency and DB capacity. |
+| `ORACLE_POOL_INCREMENT`  | No       | Integer                | `2`         | Number of new sessions opened when pool grows. |
+| `ORACLE_POOL_TIMEOUT_SECONDS` | No | Integer                | `120`       | Idle session timeout for pooled Oracle connections. |
+| `ORACLE_POOL_WAIT_TIMEOUT_SECONDS` | No | Integer           | `30`        | Maximum wait time when the pool is exhausted. |
+| `ORACLE_MAX_LIFETIME_SESSION_SECONDS` | No | Integer         | `3600`      | Maximum session lifetime before recycling. |
+| `ORACLE_STATEMENT_CACHE_SIZE` | No | Integer                | `50`        | Per-session Oracle statement cache size. |
+| `ORACLE_ARRAYSIZE`       | No       | Integer                | `200`       | Cursor arraysize for row fetch batching. |
+| `ORACLE_PREFETCH_ROWS`   | No       | Integer                | `200`       | Prefetch row count for Oracle cursor reads. |
+| `ORACLE_CALL_TIMEOUT_MS` | No       | Integer                | `30000`     | Per-call Oracle execution timeout (milliseconds). |
+| `ORACLE_MAX_RETRY_ATTEMPTS` | No   | Integer                | `3`         | Maximum retry attempts for transient Oracle failures. |
+| `ORACLE_RETRY_BACKOFF_SECONDS` | No | Float                 | `0.25`      | Base exponential backoff between retry attempts. |
+| `ORACLE_CACHE_ENABLED`   | No       | `true`/`false` (or `1`/`0`) | `false` | Enables adapter-level cache lookups/sets for Oracle read queries. |
+| `ORACLE_CACHE_TTL_SECONDS` | No     | Integer                | `30`        | TTL (seconds) used when Oracle adapter result caching is enabled. |
 
 All configuration inputs are validated at import time in `api.validation.py`. The checks are exact allowlists: hosts must be localhost/IP/hostname values, CORS origins must be absolute `http`/`https` origins without paths or userinfo, LDAP URIs must be `ldap://` or `ldaps://` URIs with valid hosts, LDAP base DNs must be comma-separated `attr=value` pairs, usernames must match the approved pattern, and log formats/levels are restricted to the documented values.
 
