@@ -29,6 +29,8 @@ _LDAP_DN_RE = re.compile(
 _API_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 _LOG_FORMATS = {"json", "text"}
 _LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
+_BOOLEAN_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_BOOLEAN_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
 
 def _ensure_non_empty_string(value: str, field_name: str) -> str:
@@ -211,6 +213,19 @@ def validate_api_version(value: str) -> str:
             f"Invalid API_VERSION '{value}'. Expected a build label or SemVer-like token."
         )
     return candidate
+
+
+def validate_bool_env(value: str, *, field_name: str) -> bool:
+    """Validate and parse strict boolean environment values."""
+
+    candidate = _ensure_non_empty_string(value, field_name).lower()
+    if candidate in _BOOLEAN_TRUE_VALUES:
+        return True
+    if candidate in _BOOLEAN_FALSE_VALUES:
+        return False
+    raise ImproperlyConfigured(
+        f"{field_name} must be one of: 1, 0, true, false, yes, no, on, off."
+    )
 
 
 def validate_log_format(value: str) -> str:

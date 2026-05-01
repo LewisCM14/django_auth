@@ -217,6 +217,22 @@ class TestAuthorizationMiddlewareIISMode:
         assert record.result == "failure"
         assert record.status_code == 403
 
+    @override_settings(DEBUG=False, AUTHZ_HIDE_FORBIDDEN_AS_NOT_FOUND=True)
+    def test_user_with_no_matching_groups_can_be_shaped_to_404(self) -> None:
+        """Authorization failures can be shaped to 404 without bypassing auth checks."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="DOMAIN\\regular_user")
+        view_func = _make_roles_view()
+
+        with patch("api.middleware.authorization.query_ldap_groups") as mock_ldap:
+            mock_ldap.return_value = ["CN=other-group,OU=Groups,DC=corp,DC=local"]
+            with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+                result = middleware.process_view(request, view_func, [], {})
+
+        assert result is not None
+        assert result.status_code == 404
+
     @override_settings(DEBUG=False)
     def test_unauthenticated_request_returns_401(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch

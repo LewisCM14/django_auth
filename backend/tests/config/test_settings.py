@@ -72,6 +72,16 @@ class TestSettingsImportValidation:
             with pytest.raises(ImproperlyConfigured, match="CORS_ALLOWED_ORIGINS"):
                 _load_settings_module("test_settings_invalid_cors_origin")
 
+    def test_invalid_debug_bool_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Importing settings fails when DEBUG uses an invalid boolean token."""
+        monkeypatch.setenv("AUTH_MODE", "dev")
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("DEBUG", "maybe")
+
+        with patch("dotenv.load_dotenv", return_value=True):
+            with pytest.raises(ImproperlyConfigured, match="DEBUG must be one of"):
+                _load_settings_module("test_settings_invalid_debug_bool")
+
     def test_missing_allowed_hosts_in_iis_mode_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -181,6 +191,7 @@ class TestSettingsSecurityConfig:
         monkeypatch.setenv("ALLOWED_HOSTS", "app.corp.local")
         monkeypatch.setenv("LDAP_SERVER_URI", "ldap://dc.corp.local")
         monkeypatch.setenv("LDAP_BASE_DN", "DC=corp,DC=local")
+        monkeypatch.delenv("SECURE_SSL_REDIRECT", raising=False)
         monkeypatch.setenv(
             "CORS_ALLOWED_ORIGINS",
             "https://portal.corp.local,https://intranet.corp.local",
@@ -190,7 +201,7 @@ class TestSettingsSecurityConfig:
             module = _load_settings_module("test_settings_security_iis")
 
         assert module.SECURE_PROXY_SSL_HEADER == ("HTTP_X_FORWARDED_PROTO", "https")
-        assert module.SECURE_SSL_REDIRECT is False
+        assert module.SECURE_SSL_REDIRECT is True
         assert module.SECURE_HSTS_SECONDS == 31536000
         assert module.SECURE_HSTS_INCLUDE_SUBDOMAINS is True
         assert module.SECURE_HSTS_PRELOAD is False

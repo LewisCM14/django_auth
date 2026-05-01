@@ -183,6 +183,32 @@ class TestAuthenticationMiddlewareIISMode:
         assert not request.user.is_authenticated
 
     @override_settings(DEBUG=False)
+    def test_iis_mode_non_string_windows_auth_token_treated_anonymous(self) -> None:
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": 12345}
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            middleware.process_request(request)
+
+        assert request.user is not None
+        assert not request.user.is_authenticated
+
+    @override_settings(DEBUG=False)
+    def test_iis_mode_oversized_windows_auth_token_treated_anonymous(self) -> None:
+        middleware = AuthenticationMiddleware(self.get_response)
+        request = Mock()
+        request.META = {"HTTP_X_IIS_WINDOWSAUTHTOKEN": "0x" + ("A" * 40)}
+        request.user = None
+
+        with patch.dict("os.environ", {"AUTH_MODE": "iis"}):
+            middleware.process_request(request)
+
+        assert request.user is not None
+        assert not request.user.is_authenticated
+
+    @override_settings(DEBUG=False)
     def test_iis_mode_invalid_resolved_username_treated_anonymous(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -293,6 +319,9 @@ class TestWindowsAuthIdentityResolver:
     )
     def test_parse_token_handle(self, token: str, expected: int | None) -> None:
         assert authentication._parse_token_handle(token) == expected
+
+    def test_parse_token_handle_rejects_non_string_input(self) -> None:
+        assert authentication._parse_token_handle(123) is None  # type: ignore[arg-type]  # Intentional non-str input to validate fail-closed parsing.
 
     def test_load_pywin32_modules_returns_none_on_non_windows(
         self, monkeypatch: pytest.MonkeyPatch

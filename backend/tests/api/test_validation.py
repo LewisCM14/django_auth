@@ -12,6 +12,7 @@ from api.validation import (
     _validate_url_port,
     validate_allowed_hosts,
     validate_api_version,
+    validate_bool_env,
     validate_cors_allowed_origins,
     validate_distinguished_name,
     validate_hostname,
@@ -214,6 +215,26 @@ class TestUserAndVersionValidation:
         """Malformed API versions fail closed."""
         with pytest.raises(ImproperlyConfigured, match="API_VERSION"):
             validate_api_version("-bad-version")
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("true", True),
+            ("FALSE", False),
+            ("1", True),
+            ("0", False),
+        ],
+    )
+    def test_validate_bool_env_accepts_known_values(
+        self, value: str, expected: bool
+    ) -> None:
+        """Boolean env parser uses a strict allowlist."""
+        assert validate_bool_env(value, field_name="FLAG") is expected
+
+    def test_validate_bool_env_rejects_unknown_value(self) -> None:
+        """Unknown boolean env values fail closed."""
+        with pytest.raises(ImproperlyConfigured, match="FLAG must be one of"):
+            validate_bool_env("sometimes", field_name="FLAG")
 
     @pytest.mark.parametrize(
         "value",

@@ -204,6 +204,7 @@ ruff >= 0.15.9`"]
 
 1. Source Adapter Layer
     - One adapter per external source.
+    - Provides a reusable Oracle adapter (`api/adapters/oracle.py`) for pooled, retry-aware, read-only SQL access from the service layer.
     - Handles source-specific authentication, request/response contracts, retries, and error mapping.
     - Performs minimal parsing: converts raw responses to native Python structures, handles protocol-level details, and validates required fields, but does not apply business rules or normalization (handled in the application & mapping layer).
     - Logs external call lifecycle (start, response status, retries, failures) at appropriate levels (`INFO` / `WARNING` / `ERROR`). Request-ID correlation is automatic.
@@ -374,7 +375,8 @@ backend/
 │   │   ├── health.py
 │   │   └── user.py
 │   ├── adapters/
-│   │   └── __init__.py
+│   │   ├── __init__.py
+│   │   └── oracle.py
 │   └── migrations/
 ├── config/
 │     ├── __init__.py
@@ -387,6 +389,9 @@ backend/
 │   ├── conftest.py
 │   ├── api/
 │   │   ├── __init__.py
+│   │   ├── adapters/
+│   │   │   ├── __init__.py
+│   │   │   └── test_oracle.py
 │   │   ├── middleware/
 │   │   │   ├── __init__.py
 │   │   │   ├── test_authentication.py
@@ -454,6 +459,7 @@ backend/
 | `api/request_user.py`               | Cross-cutting        | Helper for resolving the middleware-attached request user across DRF wrappers and request logging |
 | `api/services/`                     | Service              | Business logic, orchestration, state machines, normalization & mapping |
 | `api/adapters/`                     | Source Adapter       | External data-source access with resilience patterns |
+| `api/adapters/oracle.py`            | Source Adapter       | Reusable pooled Oracle adapter for parameterized read-only SQL queries (`fetch_all` / `fetch_one`) returning native Python dictionaries, with structured security logging and optional adapter-result caching |
 | `api/migrations/`                   | Persistence          | Django migration history |
 | `config/`                           | Cross-cutting        | Django and app configuration (settings, ASGI, logging, etc.) |
 | `config/logging.py`                 | Cross-cutting        | `JsonFormatter` — custom `logging.Formatter` subclass for UTC JSON output and structured security fields |
@@ -1087,6 +1093,8 @@ Example .env for Local Development:
 
 ```
 AUTH_MODE=dev
+SECRET_KEY=change-me
+DEBUG=true
 DEV_USER_IDENTITY=dev_admin
 DEV_USER_ROLE=app_admin
 ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
@@ -1137,7 +1145,7 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | Environment Variable     | Required | Values                   | Default     | Description |
 |--------------------------|----------|--------------------------|-------------|-------------|
 | `AUTH_MODE`              | Yes      | `dev`, `iis`             | —           | Authentication mode. `dev` for local development (mocked auth), `iis` for production (IIS/AD). |
-| `DEBUG`                  | No       | `True`, `False`          | `False`     | Django debug mode. Must be `False` in production. |
+| `DEBUG`                  | No       | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` | `false` | Django debug mode parsed via strict boolean allowlist. Must be `False` in production. |
 | `DEV_USER_IDENTITY`      | dev only | Any string               | `dev_admin` | Mock username injected in dev mode. |
 | `DEV_USER_ROLE`          | dev only | `app_admin`, `app_viewer` | —          | Role assigned to the mock user in dev mode. Must match one of the roles defined in `api.constants.ROLES`. |
 | `ADMIN_AD_GROUP`         | Yes      | LDAP distinguished name  | —           | Active Directory group DN mapped to `app_admin`. |
@@ -1147,9 +1155,11 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `LDAP_BASE_DN`           | iis only | Distinguished name       | —           | Base DN used for Active Directory group membership search. |
 | `LOG_LEVEL`              | No       | Python log level name    | `WARNING`   | Root logger level. Overrides the default for production tuning. |
 | `LOG_FORMAT`             | No       | `json`, `text`           | `text`      | Log output format. Use `json` in production for structured, machine-parseable output. |
+| `SECURE_SSL_REDIRECT`    | No       | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` | `true` in `iis`, `false` in `dev` | Redirect HTTP requests to HTTPS at the Django layer (default-on in IIS mode). |
+| `AUTHZ_HIDE_FORBIDDEN_AS_NOT_FOUND` | No | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` | `false` | Optional response shaping: return `404` instead of `403` for authorization denials while preserving internal security logs. |
 | `ALLOWED_HOSTS`          | Yes      | Comma-separated hosts    | —           | Django `ALLOWED_HOSTS` setting. |
 | `CORS_ALLOWED_ORIGINS`   | No       | Comma-separated origins  | —           | Origins permitted for cross-origin requests. Omit if frontend is same-origin. |
-| `SECRET_KEY`             | Yes      | String                   | —           | Django secret key. Must be unique and unpredictable in production. |
+| `SECRET_KEY`             | Yes      | String | — | Django secret key. |
 
 All configuration inputs are validated at import time in `api.validation.py`. The checks are exact allowlists: hosts must be localhost/IP/hostname values, CORS origins must be absolute `http`/`https` origins without paths or userinfo, LDAP URIs must be `ldap://` or `ldaps://` URIs with valid hosts, LDAP base DNs must be comma-separated `attr=value` pairs, usernames must match the approved pattern, and log formats/levels are restricted to the documented values.
 
