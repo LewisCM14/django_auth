@@ -1075,7 +1075,7 @@ The `detail` and `request_id` fields match the standard error envelope. The `Ret
 - A configuration option (environment variable `AUTH_MODE=dev`) is available to switch the backend into development mode.
 - In development mode:
     - Authentication middleware injects a mock user identity (e.g., dev_admin or dev_viewer).
-    - Authorization middleware assigns a canonical application role based on a second environment variable (`DEV_USER_ROLE`). The value must match one of the roles defined in `api.constants.ROLES` (for example `app_admin` or `app_viewer`).
+    - Authorization middleware assigns one or more canonical application roles based on a second environment variable (`DEV_USER_ROLE`). The value is a comma-separated list and every entry must match one of the roles defined in `api.constants.ROLES` (for example `app_admin,app_viewer`).
     - `ADMIN_AD_GROUP` and `VIEWER_AD_GROUP` remain required and provide the canonical AD group DNs for role mapping in every environment.
     - LDAP/AD lookups are skipped or mocked.
 - This mode must be used for local development, automated testing, and CI pipelines.
@@ -1087,7 +1087,7 @@ AUTH_MODE=dev
 SECRET_KEY=change-me
 DEBUG=true
 DEV_USER_IDENTITY=dev_admin
-DEV_USER_ROLE=app_admin
+DEV_USER_ROLE=app_admin,app_viewer
 ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
 VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
 ```
@@ -1138,7 +1138,7 @@ No changes to `api/permissions.py` or `api/middleware/authorization.py` are requ
 | `AUTH_MODE`              | Yes      | `dev`, `iis`             | —           | Authentication mode. `dev` for local development (mocked auth), `iis` for production (IIS/AD). |
 | `DEBUG`                  | No       | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` | `false` | Django debug mode parsed via strict boolean allowlist. Must be `False` in production. |
 | `DEV_USER_IDENTITY`      | dev only | Any string               | `dev_admin` | Mock username injected in dev mode. |
-| `DEV_USER_ROLE`          | dev only | `app_admin`, `app_viewer` | —          | Role assigned to the mock user in dev mode. Must match one of the roles defined in `api.constants.ROLES`. |
+| `DEV_USER_ROLE`          | dev only | Comma-separated values from `api.constants.ROLES` | — | Role(s) assigned to the mock user in dev mode. Every role must match one of the roles defined in `api.constants.ROLES` (for example `app_admin,app_viewer`). |
 | `ADMIN_AD_GROUP`         | Yes      | LDAP distinguished name  | —           | Active Directory group DN mapped to `app_admin`. |
 | `VIEWER_AD_GROUP`        | Yes      | LDAP distinguished name  | —           | Active Directory group DN mapped to `app_viewer`. |
 | `API_VERSION`            | No       | SemVer tag / build label | `APP_VERSION` | Application version surfaced by `/api/health/` and `drf-spectacular`; the tagged release pipeline replaces this placeholder with the release tag. |

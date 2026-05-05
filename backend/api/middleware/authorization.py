@@ -9,8 +9,9 @@ set by the permission decorators in ``api.permissions``:
 
 Role resolution happens only for role-protected views:
 
-- Dev mode (``AUTH_MODE=dev``): reads ``DEV_USER_ROLE`` from environment and
-    requires it to match one of the canonical roles defined in ``api.constants.ROLES``
+- Dev mode (``AUTH_MODE=dev``): reads ``DEV_USER_ROLE`` from environment as
+    a comma-separated list and requires each role to match one of the
+    canonical roles defined in ``api.constants.ROLES``
 - IIS mode (``AUTH_MODE=iis``): queries LDAP for AD group membership (per-request)
 
 This middleware is responsible only for authentication and role checks implied
@@ -230,6 +231,8 @@ class AuthorizationMiddleware:
         """Resolve application roles for a user.
 
         In dev mode, reads from ``DEV_USER_ROLE`` environment variable.
+        Values are comma-separated role names and every role must be
+        canonical (present in ``api.constants.ROLES``).
         In IIS mode, queries LDAP for AD group membership on every request.
         Results are not cached — AD changes take immediate effect.
 
@@ -240,12 +243,7 @@ class AuthorizationMiddleware:
             List of application roles the user belongs to.
         """
         if os.getenv("AUTH_MODE", "iis") == "dev":
-            dev_role = os.getenv("DEV_USER_ROLE", "").strip()
-            if dev_role not in ROLES:
-                raise ImproperlyConfigured(
-                    "DEV_USER_ROLE must match one of the application roles defined in api.constants.ROLES."
-                )
-            return [dev_role]
+            return self._parse_dev_roles(os.getenv("DEV_USER_ROLE", ""))
 
         ad_groups = query_ldap_groups(username)
 
@@ -254,6 +252,31 @@ class AuthorizationMiddleware:
                 AD_GROUP_TO_ROLE_MAP[g] for g in ad_groups if g in AD_GROUP_TO_ROLE_MAP
             )
         )
+
+    def _parse_dev_roles(self, raw_value: str) -> list[str]:
+        """Parse and validate DEV_USER_ROLE as a comma-separated role list."""
+        value = raw_value.strip()
+        if not value:
+            raise ImproperlyConfigured(
+                "DEV_USER_ROLE must define one or more comma-separated roles from api.constants.ROLES."
+            )
+
+        parsed_roles = [role.strip() for role in value.split(",")]
+        if any(not role for role in parsed_roles):
+            raise ImproperlyConfigured(
+                "DEV_USER_ROLE contains an empty role entry. Use comma-separated values like 'app_admin,app_viewer'."
+            )
+
+        invalid_roles = [role for role in parsed_roles if role not in ROLES]
+        if invalid_roles:
+            invalid_values = ", ".join(sorted(dict.fromkeys(invalid_roles)))
+            allowed_values = ", ".join(ROLES)
+            raise ImproperlyConfigured(
+                "DEV_USER_ROLE contains invalid roles: "
+                f"{invalid_values}. Allowed roles: {allowed_values}."
+            )
+
+        return list(dict.fromkeys(parsed_roles))
 
 
 def query_ldap_groups(username: str) -> list[str]:

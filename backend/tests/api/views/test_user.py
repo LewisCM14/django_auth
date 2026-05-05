@@ -6,6 +6,7 @@ import pytest
 from django.core.cache import cache
 from django.test import Client
 
+from api.constants import ADMIN_AD_GROUP, VIEWER_AD_GROUP
 from api.views.user import UserView
 
 
@@ -48,6 +49,37 @@ class TestUserView:
         response = viewer_client.get("/api/user/")
         assert response.status_code == 200
         assert "app_viewer" in response.json()["roles"]
+
+    @pytest.mark.django_db
+    def test_user_with_two_ad_groups_returns_both_roles(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """User in admin and viewer AD groups receives both application roles."""
+
+        def mock_query_ldap_groups(username: str) -> list[str]:
+            if username == "DOMAIN\\power_user":
+                return [ADMIN_AD_GROUP, VIEWER_AD_GROUP]
+            return []
+
+        monkeypatch.setattr(
+            "api.middleware.authorization.query_ldap_groups",
+            mock_query_ldap_groups,
+        )
+        monkeypatch.setattr(
+            "api.middleware.authentication.WindowsAuthIdentityResolver.resolve",
+            lambda _self, _token: "DOMAIN\\power_user",
+        )
+        monkeypatch.setenv("AUTH_MODE", "iis")
+
+        client = Client()
+        client.defaults["HTTP_X_IIS_WINDOWSAUTHTOKEN"] = "0xD44"
+
+        response = client.get("/api/user/")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["username"] == "DOMAIN\\power_user"
+        assert payload["roles"] == ["app_admin", "app_viewer"]
 
     @pytest.mark.django_db
     def test_user_response_has_private_cache_header(self, admin_client: Client) -> None:

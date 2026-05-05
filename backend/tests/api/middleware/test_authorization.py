@@ -6,7 +6,8 @@ must resolve to one of ``@authz_public``, ``@authz_authenticated``, or
 ``@authz_roles(...)`` for authorization checks to proceed.
 
 Role resolution happens only when a view requires roles:
-- Dev mode: reads ``DEV_USER_ROLE`` environment variable and requires it to match ``api.constants.ROLES``
+- Dev mode: reads ``DEV_USER_ROLE`` environment variable as a comma-separated
+    list and requires every role to match ``api.constants.ROLES``
 - IIS mode: queries LDAP (per-request) for AD group membership
 """
 
@@ -100,6 +101,44 @@ class TestAuthorizationMiddlewareDevMode:
 
         assert result is None
         assert request.user.roles == [ROLE_VIEWER]
+
+    @override_settings(DEBUG=True)
+    def test_dev_mode_parses_multiple_roles_from_env(self) -> None:
+        """In dev mode, DEV_USER_ROLE accepts comma-separated canonical roles."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="dev_admin")
+        view_func = _make_roles_view()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "AUTH_MODE": "dev",
+                "DEV_USER_ROLE": f"{ROLE_ADMIN}, {ROLE_VIEWER}, {ROLE_ADMIN}",
+            },
+        ):
+            result = middleware.process_view(request, view_func, [], {})
+
+        assert result is None
+        assert request.user.roles == [ROLE_ADMIN, ROLE_VIEWER]
+
+    @override_settings(DEBUG=True)
+    def test_dev_mode_rejects_empty_roles_in_comma_separated_list(self) -> None:
+        """In dev mode, DEV_USER_ROLE rejects empty entries in role lists."""
+        middleware = AuthorizationMiddleware(self.get_response)
+        request = Mock()
+        request.user = Mock(username="dev_admin")
+        view_func = _make_roles_view()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "AUTH_MODE": "dev",
+                "DEV_USER_ROLE": f"{ROLE_ADMIN},,{ROLE_VIEWER}",
+            },
+        ):
+            with pytest.raises(ImproperlyConfigured, match="DEV_USER_ROLE"):
+                middleware.process_view(request, view_func, [], {})
 
     @override_settings(DEBUG=True)
     def test_dev_mode_rejects_non_canonical_role(self) -> None:

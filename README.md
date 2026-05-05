@@ -26,12 +26,13 @@ SECRET_KEY=change-me
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
 DEV_USER_IDENTITY=dev_admin
-DEV_USER_ROLE=app_admin
+DEV_USER_ROLE=app_admin,app_viewer
 ADMIN_AD_GROUP=CN=app-admins,OU=Groups,DC=corp,DC=local
 VIEWER_AD_GROUP=CN=app-viewers,OU=Groups,DC=corp,DC=local
 ```
 
 Keep `ADMIN_AD_GROUP` and `VIEWER_AD_GROUP` populated in every environment. Dev mode does not query LDAP, but the values are validated at startup so deployment-specific `.env` files stay complete.
+`DEV_USER_ROLE` accepts one or more comma-separated canonical roles (for example `app_admin,app_viewer`).
 
 ### 4) Apply migrations
 
@@ -79,6 +80,16 @@ DEV_USER_IDENTITY=dev_viewer
 DEV_USER_ROLE=app_viewer
 ```
 
+### Admin + viewer roles
+
+Set in `backend/.env`:
+
+```env
+AUTH_MODE=dev
+DEV_USER_IDENTITY=dev_power_user
+DEV_USER_ROLE=app_admin,app_viewer
+```
+
 ### Apply changes
 
 After changing role values, restart the dev server:
@@ -100,6 +111,7 @@ Expected examples:
 
 - Admin mode: `{"username": "dev_admin", "roles": ["app_admin"]}`
 - Viewer mode: `{"username": "dev_viewer", "roles": ["app_viewer"]}`
+- Admin + viewer mode: `{"username": "dev_power_user", "roles": ["app_admin", "app_viewer"]}`
 
 ## Quality Checks
 
