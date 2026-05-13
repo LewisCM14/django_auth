@@ -20,4 +20,6 @@ urlpatterns: list[URLPattern | URLResolver] = [
     ),
     # API routes
     path("api/", include("api.urls")),
+    # Dedicated monitoring routes (can be anonymously allowed in IIS by path)
+    path("monitoring/", include("api.monitoring_urls")),
 ]

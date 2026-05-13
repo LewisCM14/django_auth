@@ -50,6 +50,13 @@ class TestHealthView:
         assert isinstance(payload["uptime_seconds"], int)
         assert payload["uptime_seconds"] >= 0
 
+
+    def test_monitoring_health_alias_returns_200(self) -> None:
+        """GET /monitoring/health/ returns HTTP 200 for IIS anonymous probes."""
+        response = self.client.get("/monitoring/health/")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
     def test_health_response_has_public_cache_header(self) -> None:
         """GET /api/health/ returns short-lived public cache directives."""
         response = self.client.get("/api/health/")
