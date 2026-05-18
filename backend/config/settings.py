@@ -108,7 +108,7 @@ USE_I18N = True
 USE_TZ = True
 
 # Required so Swagger UI assets can be served in development and collected in deployment.
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
 
 # Avoid implicit primary-key defaults on ORM models
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

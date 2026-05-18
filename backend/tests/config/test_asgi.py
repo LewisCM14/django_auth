@@ -13,16 +13,18 @@ from django.test import override_settings
 class TestAsgiModule:
     """Tests for ASGI module initialization behavior."""
 
-    def test_sets_default_settings_module_and_creates_application(
+    @pytest.mark.parametrize("debug", [True, False])
+    def test_sets_default_settings_module_and_wraps_staticfiles_application(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        debug: bool,
     ) -> None:
-        """ASGI module sets DJANGO_SETTINGS_MODULE and initializes application."""
+        """ASGI module always wraps the Django app with staticfiles handling."""
         monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
         mock_application = Mock(name="django_asgi_app")
         wrapped_application = Mock(name="wrapped_staticfiles_app")
 
-        with override_settings(DEBUG=True):
+        with override_settings(DEBUG=debug):
             with (
                 patch(
                     "django.core.asgi.get_asgi_application",

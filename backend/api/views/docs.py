@@ -10,7 +10,8 @@ import drf_spectacular.plumbing as spectacular_plumbing
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerSplitView
 
 from api.caching import cache_private
-from api.permissions import authz_authenticated
+from api.constants import ROLE_VIEWER
+from api.permissions import authz_roles
 from api.throttling import throttle
 from api.views.base import BaseAPIView
 
@@ -40,7 +41,7 @@ spectacular_openapi.is_higher_order_type_hint = _is_higher_order_type_hint_compa
 
 @throttle("10/minute")
 @cache_private
-@authz_authenticated
+@authz_roles(ROLE_VIEWER)
 class SchemaView(SpectacularAPIView, BaseAPIView):
     """OpenAPI schema endpoint wrapper.
 
@@ -50,7 +51,7 @@ class SchemaView(SpectacularAPIView, BaseAPIView):
 
 @throttle("30/minute")
 @cache_private
-@authz_authenticated
+@authz_roles(ROLE_VIEWER)
 class SwaggerDocsView(SpectacularSwaggerSplitView, BaseAPIView):
     """Swagger UI docs endpoint wrapper.
 
