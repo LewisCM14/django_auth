@@ -41,7 +41,7 @@ class TestSchemaEndpoints:
         response = admin_client.get("/api/schema/")
         assert response.status_code == 200
         assert b"/api/health/" in response.content
-        assert b"/api/invoices/" in response.content
+        assert b"/api/equipment/{equipment_name}/serial_numbers/" in response.content
         assert b"/api/user/" in response.content
 
     @pytest.mark.django_db

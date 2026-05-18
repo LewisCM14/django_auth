@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from api.adapters.oracle import OracleAdapter
 from api.caching import cache_private
 from api.constants import ROLE_ADMIN, ROLE_VIEWER
 from api.permissions import authz_roles
-from api.serializers import EquipmentSerialListResponseSerializer, EquipmentSerialQuerySerializer
+from api.serializers import EquipmentSerialListResponseSerializer
 from api.services.oracle_invoice_service import get_oracle_adapter, list_equipment_serial_numbers
 from api.throttling import throttle
 from api.views.base import BaseAPIView
@@ -24,12 +25,13 @@ class InvoiceListView(BaseAPIView):
     serializer_class = EquipmentSerialListResponseSerializer
     oracle_adapter_provider: Callable[[], OracleAdapter] = staticmethod(get_oracle_adapter)
 
-    def get(self, request: Any) -> Response:
-        query_serializer = EquipmentSerialQuerySerializer(data=request.query_params)
-        query_serializer.is_valid(raise_exception=True)
+    def get(self, request: Any, equipment_name: str) -> Response:
+        name = equipment_name.strip()
+        if not name:
+            raise ValidationError({"equipment_name": ["This path parameter may not be blank."]})
 
         rows = list_equipment_serial_numbers(
-            name=query_serializer.validated_data["name"],
+            name=name,
             request=request,
             adapter=self.oracle_adapter_provider(),
         )
