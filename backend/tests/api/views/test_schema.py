@@ -34,7 +34,7 @@ class TestSchemaEndpoints:
         )
 
     @pytest.mark.django_db
-    def test_schema_includes_health_user_and_invoice_paths(
+    def test_schema_includes_health_user_and_equipment_paths(
         self, admin_client: Client
     ) -> None:
         """GET /api/schema/ includes core application endpoint paths."""
