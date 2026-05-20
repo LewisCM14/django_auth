@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from api.middleware.request_id import request_id_var
 from api.security_logging import (
     _first_forwarded_for,
     _resolve_source_ip,
@@ -103,6 +104,23 @@ class TestBuildSecurityEventFields:
         assert payload["resource_accessed"] == "-"
         assert explicit_payload["request_id"] == "override"
         assert explicit_payload["error_id"] == "explicit-error"
+
+    def test_build_security_event_fields_uses_context_request_id_without_request(
+        self,
+    ) -> None:
+        """Missing request falls back to request-id context variable."""
+        token = request_id_var.set("ctx-123")
+        try:
+            payload = build_security_event_fields(
+                None,
+                event_type="UNHANDLED_EXCEPTION",
+                action_attempted="execute request",
+                result="success",
+            )
+        finally:
+            request_id_var.reset(token)
+
+        assert payload["request_id"] == "ctx-123"
 
     def test_build_security_event_fields_handles_non_string_username(self) -> None:
         """Non-string usernames fall back to anonymous."""
