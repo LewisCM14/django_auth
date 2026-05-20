@@ -96,7 +96,15 @@ def _resolve_request_id(request: HttpRequest | None, request_id: str | None) -> 
     from api.middleware.request_id import request_id_var
 
     candidate = request_id_var.get()
-    return candidate if isinstance(candidate, str) and candidate else "-"
+    if not isinstance(candidate, str) or not candidate:
+        return "-"
+
+    # Treat framework-level unhandled fallbacks as missing IDs so callers
+    # without request context still emit the safe sentinel by default.
+    if candidate.startswith("unhandled-"):
+        return "-"
+
+    return candidate
 
 
 def _resolve_user_identifier(
