@@ -51,3 +51,15 @@ class TestInvoiceListView:
 
         assert response.status_code == 200
         assert adapter.calls[0][1] == {"name": "pump_101"}
+
+
+    @pytest.mark.django_db
+    def test_blank_equipment_name_returns_validation_error(
+        self, admin_client: Client
+    ) -> None:
+        response = admin_client.get("/api/equipment/%20%20/serial_numbers/")
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["equipment_name"] == ["This path parameter may not be blank."]
+        assert isinstance(body["request_id"], str) and body["request_id"]

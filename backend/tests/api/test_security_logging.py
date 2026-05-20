@@ -122,6 +122,24 @@ class TestBuildSecurityEventFields:
 
         assert payload["request_id"] == "ctx-123"
 
+
+    def test_build_security_event_fields_uses_dash_for_empty_context_request_id(
+        self,
+    ) -> None:
+        """Empty context request id falls back to sentinel."""
+        token = request_id_var.set("")
+        try:
+            payload = build_security_event_fields(
+                None,
+                event_type="UNHANDLED_EXCEPTION",
+                action_attempted="execute request",
+                result="success",
+            )
+        finally:
+            request_id_var.reset(token)
+
+        assert payload["request_id"] == "-"
+
     def test_build_security_event_fields_handles_non_string_username(self) -> None:
         """Non-string usernames fall back to anonymous."""
         request = _make_request(user=_make_user(123))

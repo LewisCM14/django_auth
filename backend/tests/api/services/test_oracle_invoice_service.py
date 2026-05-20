@@ -51,6 +51,12 @@ class TestOracleEquipmentSerialService:
         now = datetime(2026, 5, 15, 10, 0, 0)
         assert _seconds_until_next_friday_11(now) == 3600
 
+
+
+    def test_friday_cache_break_rolls_to_next_week_after_cutoff(self) -> None:
+        now = datetime(2026, 5, 15, 12, 0, 0)
+        assert _seconds_until_next_friday_11(now) == 601200
+
     def test_get_oracle_adapter_is_cached(self, monkeypatch: Any) -> None:
         created: list[object] = []
         sentinel_adapter = object()
