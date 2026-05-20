@@ -84,11 +84,18 @@ def build_security_event_fields(
 def _resolve_request_id(request: HttpRequest | None, request_id: str | None) -> str:
     if isinstance(request_id, str) and request_id:
         return request_id
-    if request is None:
-        return "-"
 
-    request_dict = getattr(request, "__dict__", {})
-    candidate = request_dict.get("request_id")
+    if request is not None:
+        request_dict = getattr(request, "__dict__", {})
+        candidate = request_dict.get("request_id")
+        if isinstance(candidate, str) and candidate:
+            return candidate
+
+    # Avoid importing request-id middleware at module import time to prevent
+    # circular import issues; resolve context-local request id lazily.
+    from api.middleware.request_id import request_id_var
+
+    candidate = request_id_var.get()
     return candidate if isinstance(candidate, str) and candidate else "-"
 
 
