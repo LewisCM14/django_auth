@@ -15,6 +15,18 @@ from api.views.user import UserView
 
 urlpatterns: list[URLPattern] = [
     path("health/", HealthView.as_view(), name="health"),
-    path("invoices/", InvoiceListView.as_view(), name="invoice-list"),
+    path(
+        "equipment/<str:equipment_name>/serial_numbers/",
+        InvoiceListView.as_view(),
+        name="equipment-serial-number-list",
+    ),
+    # Backward-compatible alias retained for existing clients/tests migrating
+    # from the previous invoice example route.
+    path(
+        "invoices/",
+        InvoiceListView.as_view(),
+        {"equipment_name": ""},
+        name="invoice-list-legacy",
+    ),
     path("user/", UserView.as_view(), name="user"),
 ]

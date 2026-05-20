@@ -47,6 +47,34 @@ uv run python manage.py runserver
 
 The API will be available at `http://127.0.0.1:8000/`.
 
+
+## Oracle Local Development (Docker)
+
+If you are testing against a local Oracle container without TLS certificates, set:
+
+```env
+ORACLE_REQUIRE_TLS=false
+```
+
+The adapter enforces TLS by default, so this opt-out is required for non-TCPS local DSNs.
+
+Recommended local Oracle variables:
+
+```env
+ORACLE_USERNAME=app_user
+ORACLE_PASSWORD=change-me
+ORACLE_DSN=localhost:1521/FREEPDB1
+ORACLE_REQUIRE_TLS=false
+```
+
+Equipment serial endpoint (new canonical path):
+
+```
+GET /api/equipment/{equipment_name}/serial_numbers/
+```
+
+A legacy `/api/invoices/` alias is temporarily retained for compatibility during migration.
+
 ## API Documentation
 
 With the server running:
