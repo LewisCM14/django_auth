@@ -122,7 +122,6 @@ class TestBuildSecurityEventFields:
 
         assert payload["request_id"] == "ctx-123"
 
-
     def test_build_security_event_fields_uses_dash_for_empty_context_request_id(
         self,
     ) -> None:
